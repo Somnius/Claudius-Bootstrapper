@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Claudius v0.3.1 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
+# Claudius v0.3.2 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, update config, run claude.
 # Requires: LM Studio (local server on port 1234); jq or Python for JSON; Claude Code CLI.
@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-VERSION="0.3.1"
+VERSION="0.3.2"
 LMSTUDIO_URL="${LMSTUDIO_URL:-http://localhost:1234}"
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
 BASHRC="${HOME}/.bashrc"
@@ -20,24 +20,49 @@ check_server() {
 }
 
 # --- Prompt when server is not running: Resume / Try start / Abort ---
+# Uses gum or fzf for TUI when available, else plain read.
 wait_for_server() {
   echo "LM Studio server is not running at ${LMSTUDIO_URL}."
-  echo ""
-  echo "  1) Resume  - I've started the server; check again."
-  echo "  2) Start   - Try to start the server (runs: lms server start)."
-  echo "  3) Abort   - Exit."
   echo ""
 
   local choice
   while true; do
-    read -rp "Choose (1-3): " choice
+    if command -v gum &>/dev/null; then
+      choice=$(gum choose --cursor="> " --cursor.foreground="212" \
+        "Resume  – I've started the server; check again" \
+        "Start   – Try to start the server (lms server start)" \
+        "Abort   – Exit" 2>/dev/null) || true
+      case "$choice" in
+        *Resume*)  choice=1 ;;
+        *Start*)   choice=2 ;;
+        *Abort*)   choice=3 ;;
+        *)         choice="" ;;
+      esac
+    elif command -v fzf &>/dev/null; then
+      choice=$(printf 'Resume  – I'\''ve started the server\nStart   – Try lms server start\nAbort   – Exit\n' | \
+        fzf --height=5 --prompt="Server not running > " \
+            --header="↑↓ move, Enter select" 2>/dev/null) || true
+      case "$choice" in
+        *Resume*)  choice=1 ;;
+        *Start*)   choice=2 ;;
+        *Abort*)   choice=3 ;;
+        *)         choice="" ;;
+      esac
+    else
+      echo "  1) Resume  - I've started the server; check again."
+      echo "  2) Start   - Try to start the server (runs: lms server start)."
+      echo "  3) Abort   - Exit."
+      echo ""
+      read -rp "Choose (1-3): " choice
+    fi
+
     case "$choice" in
       1)
         if check_server; then
           echo "Server is up. Continuing."
           return 0
         fi
-        echo "Still not reachable. Start the server in LM Studio (Local Inference Server), then choose 1 again."
+        echo "Still not reachable. Start the server in LM Studio (Local Inference Server), then choose Resume again."
         echo ""
         ;;
       2)
@@ -49,10 +74,10 @@ wait_for_server() {
             echo "Server is up. Continuing."
             return 0
           fi
-          echo "Server may still be starting. Choose 1 to retry or 3 to abort."
+          echo "Server may still be starting. Choose Resume to retry or Abort."
         else
           echo "Command 'lms' not found. Install LM Studio and ensure 'lms' is on your PATH (e.g. ~/.lmstudio/bin)."
-          echo "Start the server from the LM Studio GUI, then choose 1 to resume."
+          echo "Start the server from the LM Studio GUI, then choose Resume."
         fi
         echo ""
         ;;
@@ -61,7 +86,7 @@ wait_for_server() {
         exit 1
         ;;
       *)
-        echo "Invalid choice. Enter 1, 2, or 3."
+        [[ -n "$choice" ]] && echo "Invalid choice. Enter 1, 2, or 3 (or use the menu)."
         echo ""
         ;;
     esac
@@ -124,7 +149,8 @@ select_model() {
 
   local selected
   if command -v fzf &>/dev/null; then
-    selected=$(printf '%s\n' "${models[@]}" | fzf --height=~50% --prompt="Model> " 2>/dev/null) || true
+    selected=$(printf '%s\n' "${models[@]}" | fzf --height=~50% --prompt="Model> " \
+      --header="↑↓ move, Enter select, Esc cancel" 2>/dev/null) || true
     if [[ -n "$selected" ]]; then
       echo "$selected"
       return 0
@@ -133,7 +159,7 @@ select_model() {
   fi
 
   if command -v gum &>/dev/null; then
-    selected=$(gum choose "${models[@]}" 2>/dev/null) || true
+    selected=$(gum choose --cursor="> " --cursor.foreground="212" "${models[@]}" 2>/dev/null) || true
     if [[ -n "$selected" ]]; then
       echo "$selected"
       return 0

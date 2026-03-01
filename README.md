@@ -67,10 +67,13 @@ Then `source ~/.bashrc` or open a new shell.
 | Shell exports | `~/.bashrc`                |
 | Default model| `defaultModel` in settings |
 
+See `settings.json.example` in this repo for a template; copy to `~/.claude/settings.json` and set `defaultModel` to your LM Studio model id (e.g. from `curl -s http://localhost:1234/v1/models`).
+
 Override LM Studio URL: `LMSTUDIO_URL=http://127.0.0.1:1234 claudius`.
 
 ## Changelog
 
+- **0.3.2** (2026-03-01) – Server-down menu uses gum or fzf when available; `settings.json.example` template; README config note.
 - **0.3.1** (2026-03-01) – Model list fixed (menu to stderr). Optional fzf/gum for model selection. Version and author in script. README, LICENSE, .gitignore for public repo.
 - **0.3.0** – Rename project to Claudius; script to `claudius.sh`; add `claudius` alias in `.bashrc`.
 - **0.2.x** – Server check with Resume/Start/Abort; fetch models from LM Studio; interactive model choice; write `~/.claude/settings.json` and `.bashrc` exports; run Claude Code direct to LM Studio.
@@ -80,12 +83,13 @@ Override LM Studio URL: `LMSTUDIO_URL=http://127.0.0.1:1234 claudius`.
 
 ## Files
 
-| File         | Description                    |
-|--------------|--------------------------------|
-| `claudius.sh`| Bootstrapper script            |
-| `README.md`  | This file                      |
-| `LICENSE`    | MIT license                    |
-| `.gitignore` | Ignore notes, local/sensitive  |
+| File                    | Description                                      |
+|-------------------------|--------------------------------------------------|
+| `claudius.sh`           | Bootstrapper script                              |
+| `settings.json.example` | Template for `~/.claude/settings.json` (copy & edit) |
+| `README.md`             | This file                                        |
+| `LICENSE`               | MIT license                                      |
+| `.gitignore`            | Ignore notes, local/sensitive                    |
 
 ## Troubleshooting
 

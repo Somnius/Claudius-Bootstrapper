@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:1234",
+    "ANTHROPIC_AUTH_TOKEN": "lmstudio",
+    "ANTHROPIC_API_KEY": ""
+  },
+  "defaultModel": "your-model-id"
+}
