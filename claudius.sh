@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Claudius v0.5.1 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
+# Claudius v0.6.0 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context length, update config, run claude.
 # Requires: LM Studio (local server on port 1234); jq or Python for JSON; Claude Code CLI.
 
 set -euo pipefail
 
-VERSION="0.5.1"
+VERSION="0.6.0"
 LMSTUDIO_URL="${LMSTUDIO_URL:-http://localhost:1234}"
 LMSTUDIO_API="${LMSTUDIO_URL}/api/v1"
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
@@ -19,6 +19,47 @@ SESSION_DIRS="projects debug file-history tasks todos plans shell-snapshots sess
 
 # Curl timeout: connect + max total (avoid hanging)
 CURL_TIMEOUT="${CURL_TIMEOUT:-10}"
+
+# --- First-time checks: LM Studio and required commands (run when prefs missing) ---
+# Returns 0 if LM Studio appears installed (lms in PATH or common path), 1 otherwise.
+check_lm_studio_installed() {
+  if command -v lms &>/dev/null; then
+    return 0
+  fi
+  [[ -x "${HOME}/.lmstudio/bin/lms" ]] && return 0
+  [[ -x "/opt/LM Studio/bin/lms" ]] 2>/dev/null && return 0
+  echo "LM Studio does not appear to be installed (no 'lms' command found)."
+  echo "  Download and install from: https://lmstudio.ai/"
+  echo "  Then run this script again with: claudius --init"
+  echo ""
+  return 1
+}
+
+# Check required commands (curl; jq or python3; claude). Returns 0 if all ok, 1 otherwise. Prints install hints.
+check_required_commands() {
+  local missing=()
+  command -v curl &>/dev/null || missing+=("curl")
+  if ! command -v jq &>/dev/null && ! command -v python3 &>/dev/null; then
+    missing+=("jq or python3 (at least one for JSON)")
+  fi
+  command -v claude &>/dev/null || missing+=("claude (Claude Code CLI)")
+
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  echo "Missing required command(s): ${missing[*]}"
+  echo ""
+  echo "Install on your system, then run this script again with: claudius --init"
+  echo ""
+  echo "Typical install (adjust for your distro):"
+  echo "  curl:    apt install curl   (Debian/Ubuntu/PikaOS)  |  dnf install curl   (Fedora)  |  pacman -S curl   (Arch)"
+  echo "  jq:      apt install jq     (Debian/Ubuntu/PikaOS)  |  dnf install jq     (Fedora)  |  pacman -S jq     (Arch)"
+  echo "  python3: usually preinstalled; if not: apt/dnf/pacman install python3"
+  echo "  claude:  install from https://code.claude.com/docs (e.g. curl -fsSL https://claude.ai/install.sh | bash)"
+  echo ""
+  return 1
+}
 
 # --- First-time / --init: ask preferences and save to CLAUDIUS_PREFS ---
 run_init() {
@@ -74,6 +115,11 @@ get_keep_session_on_exit() {
     python3 -c "import json; print(json.load(open('$CLAUDIUS_PREFS')).get('keepSessionOnExit', True))" 2>/dev/null || echo "true"
   fi
 }
+
+# --- PURGE SAFETY: Session data is destructive. ---
+# These functions must ONLY be called from run_purge() or run_after_session_menu(),
+# and ONLY for the specific option the user chose. Never call a purge automatically
+# or from any path that does not require explicit user input for that choice.
 
 # --- Purge session data: delete files in SESSION_DIRS and optionally history.jsonl ---
 # Usage: purge_session_dirs [optional: also_clear_history 1]
@@ -171,7 +217,7 @@ run_purge() {
     5) purge_older_than_mins 120; echo "  Purged session data older than 2 hours." ;;
     6) purge_older_than_mins 60;  echo "  Purged session data older than 1 hour." ;;
     7) purge_older_than_mins 30;  echo "  Purged session data older than 30 minutes." ;;
-    *) echo "Invalid choice."; return 1 ;;
+    *) echo "Invalid choice. No data purged."; return 0 ;;
   esac
   return 0
 }
@@ -193,13 +239,14 @@ run_after_session_menu() {
 
   local choice
   read -rp "Choose (1-9): " choice
+  # Only the exact option chosen by the user triggers a purge; anything else skips.
   case "$choice" in
     1) purge_session_recent; echo "  Deleted current session." ;;
     2)
       read -rp "Type YES to confirm purge of ALL session data: " a
-      [[ "${a^^}" != "YES" ]] && echo "Skipped." && return 0
+      [[ "${a^^}" != "YES" ]] && echo "Skipped. No data purged." && return 0
       read -rp "Type PURGE to confirm again: " b
-      [[ "${b^^}" != "PURGE" ]] && echo "Skipped." && return 0
+      [[ "${b^^}" != "PURGE" ]] && echo "Skipped. No data purged." && return 0
       purge_session_dirs 1
       echo "  Purged all session data."
       ;;
@@ -209,8 +256,8 @@ run_after_session_menu() {
     6) purge_older_than_mins 120; echo "  Purged session data older than 2 hours." ;;
     7) purge_older_than_mins 60;  echo "  Purged session data older than 1 hour." ;;
     8) purge_older_than_mins 30;  echo "  Purged session data older than 30 minutes." ;;
-    9) echo "  Skipped." ;;
-    *) echo "  Skipped." ;;
+    9|q|Q) echo "  Skipped. No data purged." ;;
+    *) echo "  Skipped. No data purged." ;;
   esac
   return 0
 }
@@ -396,6 +443,136 @@ select_context_length() {
   done
 }
 
+# --- Memory check: system RAM and GPU VRAM (NVIDIA, AMD, Intel) ---
+# Output: system RAM available in MB; GPU lines "vendor|free_mb|total_mb" (one per GPU).
+get_system_ram_available_mb() {
+  if [[ -r /proc/meminfo ]]; then
+    local avail
+    avail=$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)
+    [[ -n "$avail" ]] && echo "$avail" && return 0
+  fi
+  echo "0"
+  return 1
+}
+
+# Detect GPU(s) and output "vendor|free_mb|total_mb" per line. Vendor: NVIDIA, AMD, Intel, or unknown.
+get_gpu_vram_info() {
+  local card path vendor total_mb free_mb
+
+  # NVIDIA: nvidia-smi (free + total per GPU)
+  if command -v nvidia-smi &>/dev/null; then
+    nvidia-smi --query-gpu=memory.free,memory.total --format=csv,noheader,nounits 2>/dev/null | while IFS=, read -r free total; do
+      free=$(echo "$free" | tr -d ' ')
+      total=$(echo "$total" | tr -d ' ')
+      [[ -n "$total" && "$total" -gt 0 ]] && echo "NVIDIA|${free}|${total}"
+    done
+    return 0
+  fi
+
+  # AMD / Intel: /sys/class/drm/card*/device/
+  for card in /sys/class/drm/card[0-9]*/; do
+    [[ -d "${card}device" ]] || continue
+    path="${card}device"
+    # Skip if no DRM device (e.g. output only)
+    [[ -e "${path}/mem_info_vram_total" ]] || [[ -e "${path}/mem_info_vram_used" ]] || continue
+    vendor="unknown"
+    if [[ -f "${path}/vendor" ]]; then
+      local v
+      v=$(cat "${path}/vendor" 2>/dev/null)
+      [[ "$v" == "0x1002" ]] && vendor="AMD"
+      [[ "$v" == "0x8086" ]] && vendor="Intel"
+      [[ "$v" == "0x10de" ]] && vendor="NVIDIA"
+    fi
+    # Prefer PCI device uevent for vendor (card's device is usually the PCI GPU)
+    if [[ -f "${path}/uevent" ]]; then
+      local pci_id
+      pci_id=$(grep -E '^PCI_ID=' "${path}/uevent" 2>/dev/null | cut -d= -f2)
+      case "$pci_id" in
+        1002:*) vendor="AMD" ;;
+        8086:*) vendor="Intel" ;;
+        10de:*) vendor="NVIDIA" ;;
+      esac
+    fi
+    total_mb=0
+    free_mb=0
+    if [[ -r "${path}/mem_info_vram_total" ]]; then
+      total_mb=$(($(cat "${path}/mem_info_vram_total" 2>/dev/null || echo 0) / 1048576))
+      if [[ -r "${path}/mem_info_vram_used" ]]; then
+        local used
+        used=$(($(cat "${path}/mem_info_vram_used" 2>/dev/null || echo 0) / 1048576))
+        free_mb=$((total_mb - used))
+        [[ $free_mb -lt 0 ]] && free_mb=0
+      else
+        free_mb="$total_mb"
+      fi
+    fi
+    [[ "$total_mb" -gt 0 ]] && echo "${vendor}|${free_mb}|${total_mb}"
+  done
+  return 0
+}
+
+# Rough estimate: model size (from key e.g. 7b, 20b, 30b) + KV cache for context. Returns MB.
+estimate_required_mb() {
+  local model_key="$1" context="$2"
+  local param_b=7
+  if [[ "$model_key" =~ [0-9]+[bB] ]]; then
+    param_b=$(echo "$model_key" | grep -oE '[0-9]+[bB]' | head -1 | tr -d bB)
+    [[ -z "$param_b" || "$param_b" -lt 1 ]] && param_b=7
+  fi
+  # Model weights fp16: ~2 bytes per param -> param_b * 2 GB = param_b * 2048 MB
+  local model_mb=$((param_b * 2048))
+  # KV cache: conservative ~0.5 MB per token (varies by architecture)
+  local cache_mb=$((context * 512 / 1024))
+  echo $((model_mb + cache_mb))
+}
+
+# Check system RAM + GPU VRAM vs estimated need; if likely insufficient, warn and ask "Proceed anyway? [y/N]". Return 0 to proceed, 1 to abort.
+check_memory_and_confirm() {
+  local model_key="$1" context_length="$2"
+  local ram_mb req_mb
+  ram_mb=$(get_system_ram_available_mb)
+  req_mb=$(estimate_required_mb "$model_key" "$context_length")
+
+  local total_available_mb="$ram_mb"
+  local gpu_lines=()
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    gpu_lines+=("$line")
+    local free
+    free=$(echo "$line" | cut -d'|' -f2)
+    [[ -n "$free" && "$free" =~ ^[0-9]+$ ]] && total_available_mb=$((total_available_mb + free))
+  done < <(get_gpu_vram_info)
+
+  echo "" >&2
+  echo "Memory check:" >&2
+  echo "  System RAM available: ${ram_mb} MB" >&2
+  for line in "${gpu_lines[@]}"; do
+    local vendor free total
+    IFS='|' read -r vendor free total <<< "$line"
+    echo "  GPU ($vendor): ${free} MB free / ${total} MB total" >&2
+  done
+  if [[ ${#gpu_lines[@]} -eq 0 ]]; then
+    echo "  GPU: none detected (using system RAM only)" >&2
+  fi
+  echo "  Estimated need for this model + context: ~${req_mb} MB" >&2
+  echo "" >&2
+
+  if [[ "$total_available_mb" -ge "$req_mb" ]]; then
+    echo "  OK: sufficient memory detected." >&2
+    return 0
+  fi
+
+  echo "  NOTICE: Estimated need (~${req_mb} MB) exceeds available (~${total_available_mb} MB)." >&2
+  echo "  Loading may fail (e.g. HTTP 500). Try a smaller context length if it does." >&2
+  echo "" >&2
+  local confirm
+  read -rp "Proceed anyway? [y/N]: " confirm
+  confirm="${confirm:-n}"
+  [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]] && return 0
+  echo "Aborted. Run claudius again and choose a smaller context length." >&2
+  return 1
+}
+
 # --- Spinner while a background job runs; first arg is PID, optional second is message ---
 wait_with_spinner() {
   local pid="$1" msg="${2:-Loading...}"
@@ -542,6 +719,15 @@ main() {
     shift
   fi
   if [[ ! -f "$CLAUDIUS_PREFS" ]]; then
+    # First-time run: check dependencies before setup
+    echo "First-time run: checking dependencies..."
+    echo ""
+    if ! check_required_commands; then
+      exit 1
+    fi
+    if ! check_lm_studio_installed; then
+      exit 1
+    fi
     run_init
   fi
 
@@ -572,6 +758,8 @@ main() {
     echo "[dry-run] Would load $model_id with context $context_length, write $CLAUDE_SETTINGS, run: claude --model $model_id"
     exit 0
   fi
+
+  check_memory_and_confirm "$model_id" "$context_length" || exit 1
 
   echo "Loading model in LM Studio..."
   if ! load_model_with_context "$model_id" "$context_length"; then

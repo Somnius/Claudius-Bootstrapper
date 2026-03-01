@@ -1,6 +1,7 @@
 # Notes and local docs (may contain private/session info)
 NOTES*.md
 notes*.md
+discussion-log.md
 *.sty
 
 # OS and editor
