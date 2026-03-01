@@ -1,61 +1,39 @@
 #!/usr/bin/env bash
-# Claudius v0.3.3 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
+# Claudius v0.4.1 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
-# Check server, pick model, update config, run claude.
+# Check server, pick model, set context length, update config, run claude.
 # Requires: LM Studio (local server on port 1234); jq or Python for JSON; Claude Code CLI.
-# Optional: fzf or gum for interactive model selection.
 
 set -euo pipefail
 
-VERSION="0.3.3"
+VERSION="0.4.1"
 LMSTUDIO_URL="${LMSTUDIO_URL:-http://localhost:1234}"
+LMSTUDIO_API="${LMSTUDIO_URL}/api/v1"
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
 BASHRC="${HOME}/.bashrc"
+
+# Curl timeout: connect + max total (avoid hanging)
+CURL_TIMEOUT="${CURL_TIMEOUT:-10}"
 
 # --- Check if LM Studio server is reachable ---
 check_server() {
   local code
-  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 "${LMSTUDIO_URL}/v1/models" 2>/dev/null) || true
+  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${LMSTUDIO_API}/models" 2>/dev/null) || true
   [[ "$code" == "200" ]]
 }
 
 # --- Prompt when server is not running: Resume / Try start / Abort ---
-# Uses gum or fzf for TUI when available, else plain read.
 wait_for_server() {
   echo "LM Studio server is not running at ${LMSTUDIO_URL}."
+  echo ""
+  echo "  1) Resume  - I've started the server; check again."
+  echo "  2) Start   - Try to start the server (runs: lms server start)."
+  echo "  3) Abort   - Exit."
   echo ""
 
   local choice
   while true; do
-    if command -v gum &>/dev/null; then
-      choice=$(gum choose --cursor="> " --cursor.foreground="212" \
-        "Resume  – I've started the server; check again" \
-        "Start   – Try to start the server (lms server start)" \
-        "Abort   – Exit" 2>/dev/null) || true
-      case "$choice" in
-        *Resume*)  choice=1 ;;
-        *Start*)   choice=2 ;;
-        *Abort*)   choice=3 ;;
-        *)         choice="" ;;
-      esac
-    elif command -v fzf &>/dev/null; then
-      choice=$(printf 'Resume  – I'\''ve started the server\nStart   – Try lms server start\nAbort   – Exit\n' | \
-        fzf --height=5 --prompt="Server not running > " \
-            --header="↑↓ move, Enter select" 2>/dev/null) || true
-      case "$choice" in
-        *Resume*)  choice=1 ;;
-        *Start*)   choice=2 ;;
-        *Abort*)   choice=3 ;;
-        *)         choice="" ;;
-      esac
-    else
-      echo "  1) Resume  - I've started the server; check again."
-      echo "  2) Start   - Try to start the server (runs: lms server start)."
-      echo "  3) Abort   - Exit."
-      echo ""
-      read -rp "Choose (1-3): " choice
-    fi
-
+    read -rp "Choose (1-3): " choice
     case "$choice" in
       1)
         if check_server; then
@@ -86,46 +64,35 @@ wait_for_server() {
         exit 1
         ;;
       *)
-        [[ -n "$choice" ]] && echo "Invalid choice. Enter 1, 2, or 3 (or use the menu)."
+        echo "Invalid choice. Enter 1, 2, or 3."
         echo ""
         ;;
     esac
   done
 }
 
-# --- Fetch model list from LM Studio ---
+# --- Fetch model list from LM Studio (native API: key and max_context_length) ---
+# Output: one line per LLM: "key|max_context_length"
 fetch_models() {
   local resp
-  resp=$(curl -s --connect-timeout 2 "${LMSTUDIO_URL}/v1/models" 2>/dev/null) || true
+  resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${LMSTUDIO_API}/models" 2>/dev/null) || true
   if [[ -z "${resp}" ]]; then
     echo "Error: Could not reach LM Studio at ${LMSTUDIO_URL}. Is the local server running?" >&2
     return 1
   fi
-  # OpenAI-style: {"data":[{"id":"qwen/..."}],...} or LM Studio may use different shape
   if command -v jq &>/dev/null; then
-    if echo "$resp" | jq -e '.data[]?.id' &>/dev/null; then
-      echo "$resp" | jq -r '.data[].id'
-      return 0
-    fi
-    # Fallback: try .data[].id or .models[].key / .models[].id
     if echo "$resp" | jq -e '.models[]?' &>/dev/null; then
-      echo "$resp" | jq -r '.models[] | (.id // .key // .display_name // empty)' 2>/dev/null | head -100
+      echo "$resp" | jq -r '.models[] | select(.type == "llm") | "\(.key)|\(.max_context_length // 32768)"'
       return 0
     fi
   else
-    # No jq: use Python to parse
     echo "$resp" | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
-    if 'data' in d:
-        for m in d['data']:
-            print(m.get('id', m.get('key', '')))
-    elif 'models' in d:
-        for m in d['models']:
-            print(m.get('id', m.get('key', m.get('display_name', ''))))
-    else:
-        sys.exit(1)
+    for m in d.get('models', []):
+        if m.get('type') == 'llm':
+            print(m.get('key', '') + '|' + str(m.get('max_context_length', 32768)))
 except Exception:
     sys.exit(1)
 " 2>/dev/null && return 0
@@ -134,62 +101,141 @@ except Exception:
   return 1
 }
 
-# --- Interactive model selection (fzf, gum, or fallback) ---
+# --- Interactive model selection (numbered menu); outputs "key|max_context_length" ---
 select_model() {
-  local models
-  models=()
+  local keys=() max_ctx=()
+  local line key ctx
   while IFS= read -r line; do
-    [[ -n "$line" ]] && models+=("$line")
+    [[ -z "$line" ]] && continue
+    key="${line%%|*}"
+    ctx="${line##*|}"
+    [[ -n "$key" ]] && keys+=("$key") && max_ctx+=("$ctx")
   done < <(fetch_models)
 
-  if [[ ${#models[@]} -eq 0 ]]; then
+  if [[ ${#keys[@]} -eq 0 ]]; then
     echo "No models found. Start LM Studio and load a model, then try again." >&2
     return 1
   fi
 
-  local selected
-  if command -v fzf &>/dev/null; then
-    selected=$(printf '%s\n' "${models[@]}" | fzf --height=~50% --prompt="Model> " \
-      --header="↑↓ move, Enter select, Esc cancel" 2>/dev/null) || true
-    if [[ -n "$selected" ]]; then
-      echo "$selected"
-      return 0
-    fi
-    return 1
-  fi
-
-  if command -v gum &>/dev/null; then
-    selected=$(gum choose --cursor="> " --cursor.foreground="212" "${models[@]}" 2>/dev/null) || true
-    if [[ -n "$selected" ]]; then
-      echo "$selected"
-      return 0
-    fi
-    return 1
-  fi
-
-  # Fallback: numbered menu (menu to stderr so it shows when stdout is captured)
   echo "Models available in LM Studio:" >&2
   echo "" >&2
   local i
-  for i in "${!models[@]}"; do
-    printf "  %2d) %s\n" "$((i + 1))" "${models[$i]}" >&2
+  for i in "${!keys[@]}"; do
+    printf "  %2d) %s (max %s tokens)\n" "$((i + 1))" "${keys[$i]}" "${max_ctx[$i]}" >&2
   done
   echo "  q) Quit" >&2
   echo "" >&2
 
   local choice num
   while true; do
-    read -rp "Select model (1-${#models[@]} or q): " choice
+    read -rp "Select model (1-${#keys[@]} or q): " choice
     [[ "$choice" == "q" || "$choice" == "Q" ]] && return 1
     if [[ "$choice" =~ ^[0-9]+$ ]]; then
       num=$((choice))
-      if (( num >= 1 && num <= ${#models[@]} )); then
-        echo "${models[$((num - 1))]}"
+      if (( num >= 1 && num <= ${#keys[@]} )); then
+        echo "${keys[$((num - 1))]}|${max_ctx[$((num - 1))]}"
         return 0
       fi
     fi
     echo "Invalid choice. Try again." >&2
   done
+}
+
+# --- Choose context length: 5 suggested values from min to max + custom ---
+# Args: model_key, max_context_length. Outputs chosen context_length (number).
+select_context_length() {
+  local model_key="$1" max_ctx="$2"
+  local min_ctx=2048
+  [[ "$max_ctx" -lt "$min_ctx" ]] && min_ctx=1024
+  if [[ "$max_ctx" -le "$min_ctx" ]]; then
+    echo "$max_ctx"
+    return 0
+  fi
+
+  # Five suggested values: spread from min_ctx to max_ctx (rounded to multiples of 256)
+  local step=$(( (max_ctx - min_ctx) / 4 ))
+  local v1=$min_ctx v2 v3 v4 v5=$max_ctx
+  v2=$(( (min_ctx + step) / 256 * 256 ))
+  v3=$(( (min_ctx + 2 * step) / 256 * 256 ))
+  v4=$(( (min_ctx + 3 * step) / 256 * 256 ))
+  [[ "$v2" -lt "$min_ctx" ]] && v2=$min_ctx
+  [[ "$v3" -gt "$max_ctx" ]] && v3=$max_ctx
+  [[ "$v4" -gt "$max_ctx" ]] && v4=$max_ctx
+
+  echo "Context length (tokens) for $model_key: min $min_ctx, max $max_ctx" >&2
+  echo "" >&2
+  echo "  1) $v1" >&2
+  echo "  2) $v2" >&2
+  echo "  3) $v3" >&2
+  echo "  4) $v4" >&2
+  echo "  5) $max_ctx" >&2
+  echo "  6) Custom (enter your own number)" >&2
+  echo "" >&2
+
+  local choice
+  while true; do
+    read -rp "Choose (1-6): " choice
+    case "$choice" in
+      1) echo "$v1"; return 0 ;;
+      2) echo "$v2"; return 0 ;;
+      3) echo "$v3"; return 0 ;;
+      4) echo "$v4"; return 0 ;;
+      5) echo "$max_ctx"; return 0 ;;
+      6)
+        read -rp "Enter context length (${min_ctx}-${max_ctx}): " choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge "$min_ctx" ]] && [[ "$choice" -le "$max_ctx" ]]; then
+          echo "$choice"
+          return 0
+        fi
+        echo "Enter a number between $min_ctx and $max_ctx." >&2
+        ;;
+      *)
+        echo "Invalid choice. Enter 1-6." >&2
+        ;;
+    esac
+  done
+}
+
+# --- Spinner while a background job runs; first arg is PID, optional second is message ---
+wait_with_spinner() {
+  local pid="$1" msg="${2:-Loading...}"
+  local spin='-\|/' i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    printf "\r  %s %s  " "$msg" "${spin:i++%4:1}"
+    sleep 0.15
+  done
+  printf "\r  %s done.   \n" "$msg"
+}
+
+# --- Load model with given context length via LM Studio API; show spinner until load finishes ---
+load_model_with_context() {
+  local model_key="$1" context_length="$2"
+  local tmp resp body code
+  tmp=$(mktemp)
+  (
+    curl -s -w "\n%{http_code}" --connect-timeout 2 --max-time 300 \
+      -X POST -H "Content-Type: application/json" \
+      -d "{\"model\": \"${model_key}\", \"context_length\": ${context_length}}" \
+      "${LMSTUDIO_API}/models/load" 2>/dev/null || printf '\n000\n'
+  ) > "$tmp" &
+  wait_with_spinner $! "Loading model (context ${context_length})…"
+  resp=$(cat "$tmp")
+  rm -f "$tmp"
+  body="${resp%$'\n'*}"
+  code="${resp##*$'\n'}"
+  if [[ "$code" != "200" ]]; then
+    echo "Warning: LM Studio load returned HTTP $code. Response: ${body:0:200}" >&2
+    return 1
+  fi
+  # Optionally show load time if present in JSON
+  if command -v jq &>/dev/null && echo "$body" | jq -e '.load_time_seconds' &>/dev/null; then
+    local secs
+    secs=$(echo "$body" | jq -r '.load_time_seconds')
+    echo "  Loaded $model_key with context length $context_length (${secs}s)."
+  else
+    echo "  Loaded $model_key with context length $context_length."
+  fi
+  return 0
 }
 
 # --- Update ~/.claude/settings.json ---
@@ -277,19 +323,39 @@ verify_and_export() {
 
 # --- Main ---
 main() {
+  local dry_run=0
+  [[ "${1:-}" == "--dry-run" || "${1:-}" == "--test" ]] && dry_run=1 && shift
+
   echo "Claudius v${VERSION} - Claude Code + LM Studio (direct)"
   echo "LM Studio URL: $LMSTUDIO_URL"
+  [[ "$dry_run" -eq 1 ]] && echo "(dry-run: will not write config or start claude)"
   echo ""
 
   until check_server; do
     wait_for_server
   done
 
-  local model_id
-  model_id=$(select_model) || exit 1
+  local model_line model_id max_ctx
+  model_line=$(select_model) || exit 1
+  model_id="${model_line%%|*}"
+  max_ctx="${model_line##*|}"
   echo ""
-  echo "Selected: $model_id"
+  echo "Selected: $model_id (max $max_ctx tokens)"
   echo ""
+
+  local context_length
+  context_length=$(select_context_length "$model_id" "$max_ctx") || exit 1
+  echo ""
+  echo "Context length: $context_length"
+  echo ""
+
+  if [[ "$dry_run" -eq 1 ]]; then
+    echo "[dry-run] Would load $model_id with context $context_length, write $CLAUDE_SETTINGS, run: claude --model $model_id"
+    exit 0
+  fi
+
+  echo "Loading model in LM Studio..."
+  load_model_with_context "$model_id" "$context_length" || true
 
   echo "Writing config..."
   write_settings "$model_id"

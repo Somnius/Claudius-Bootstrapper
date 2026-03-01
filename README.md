@@ -16,10 +16,11 @@ Claudius is a bootstrapper to run [Claude Code](https://code.claude.com/) (Anthr
 
 1. Checks that the LM Studio local server is running (default: `http://localhost:1234`).
 2. If not, offers: Resume (you started it), Start (runs `lms server start`), or Abort.
-3. Fetches the model list from LM Studio (`/v1/models`).
-4. Lets you pick a model: with **fzf** or **gum** if installed, otherwise a numbered menu.
-5. Writes `~/.claude/settings.json` (env and defaultModel) and appends exports to your shell config once if needed.
-6. Runs `claude --model <chosen>`.
+3. Fetches the model list from LM Studio (native API: `/api/v1/models`) and shows each model’s max context length.
+4. Lets you pick a model from a numbered menu.
+5. Asks you to choose a **context length** (tokens): suggests 5 values from min to the model’s max, or you can enter a custom number; then loads the model with that context length via LM Studio’s load API and **waits for the load to finish** (spinner; load can take 1–2 min).
+6. Writes `~/.claude/settings.json` (env and defaultModel) and appends exports to your shell config once if needed.
+7. Runs `claude --model <chosen>`.
 
 Claude Code talks directly to LM Studio's Anthropic-compatible API. Claude Code is by [Anthropic](https://www.anthropic.com/). LM Studio is by [LM Studio](https://lmstudio.ai/).
 
@@ -27,11 +28,10 @@ Claude Code talks directly to LM Studio's Anthropic-compatible API. Claude Code 
 
 ## Prerequisites
 
-- [LM Studio](https://lmstudio.ai/) installed, at least one model loaded.
+- [LM Studio](https://lmstudio.ai/) installed, at least one model available (script uses LM Studio’s native API to list and load models with a chosen context length).
 - LM Studio local server (Local Inference Server in the app), or the `lms` CLI so the script can try to start it.
 - [Claude Code](https://code.claude.com/) CLI on your PATH.
 - `curl`, and either `jq` or Python 3 for JSON.
-- Optional: [fzf](https://github.com/junegunn/fzf) or [gum](https://github.com/charmbracelet/gum) for a nicer model picker.
 
 ---
 
@@ -93,8 +93,9 @@ Add the alias for your shell (see [SHELL-SETUP.md](SHELL-SETUP.md)), then run `c
    ```
 
 3. If the server was not up, choose 1 (Resume), 2 (Start), or 3 (Abort).
-4. Pick a model (fzf/gum or number / q to quit).
-5. Claude Code starts with that model.
+4. Pick a model from the numbered list (or q to quit).
+5. Choose a context length: pick one of 5 suggested values (min to model max) or enter a custom number; the script loads the model in LM Studio and waits for the load to finish (spinner; may take 1–2 min).
+6. Claude Code starts with the selected model.
 
 ## Alias
 
@@ -114,12 +115,16 @@ Then `source ~/.bashrc` or open a new shell. For **zsh**, **fish**, **ksh**, and
 | Shell exports | your shell config (see [SHELL-SETUP.md](SHELL-SETUP.md)) |
 | Default model | `defaultModel` in settings |
 
-**Settings template:** Copy [settings.json.example](settings.json.example) to `~/.claude/settings.json` and set `defaultModel` to your LM Studio model id (e.g. from `curl -s http://localhost:1234/v1/models`). The script can also create this file when you pick a model.
+**Settings template:** Copy [settings.json.example](settings.json.example) to `~/.claude/settings.json` and set `defaultModel` to your LM Studio model key. The script creates this file when you pick a model and context length.
 
 Override LM Studio URL: `LMSTUDIO_URL=http://127.0.0.1:1234 claudius`.
 
+**Testing:** Run `claudius --dry-run` (or `--test`) to go through server check, model selection, and context-length choice without writing config or starting Claude.
+
 ## Changelog
 
+- **0.4.1** (2026-03-01) – After setting context length, wait for model load to finish with a spinner; show load time when returned by API. Then start Claude.
+- **0.4.0** (2026-03-01) – Context length: script reads model max from LM Studio API, suggests 5 values + custom, loads model with chosen context via `POST /api/v1/models/load`. Numbered menus only (fzf/gum removed). Uses native API `/api/v1/models` for listing.
 - **0.3.3** (2026-03-01) – README: project files table, config section references SHELL-SETUP.md and settings.json.example.
 - **0.3.2** (2026-03-01) – Server-down menu uses gum or fzf when available; `settings.json.example` template; README config note.
 - **0.3.1** (2026-03-01) – Model list fixed (menu to stderr). Optional fzf/gum for model selection. Version and author in script. README, LICENSE, .gitignore for public repo.
@@ -144,8 +149,9 @@ Override LM Studio URL: `LMSTUDIO_URL=http://127.0.0.1:1234 claudius`.
 
 - **Server not running** – Start Local Inference Server in LM Studio or run `lms server start`, then choose 1 (Resume).
 - **`lms` not found** – Add LM Studio’s CLI to PATH (e.g. `~/.lmstudio/bin`) or start the server from the GUI.
-- **No models** – Load at least one model in LM Studio and ensure the server is running.
+- **No models** – Load at least one model in LM Studio and ensure the server is running. The script uses the native list API (`/api/v1/models`).
 - **`claudius` not found** – Run `source ~/.bashrc` or open a new terminal.
+- **Slow or no response** – Curl uses a 10s timeout (`CURL_TIMEOUT`); load can take up to 120s. Use `claudius --dry-run` to test.
 - **Base URL** – Use `http://localhost:1234` with no trailing `/v1`; the script does this.
 
 ## Thanks & links
@@ -155,10 +161,8 @@ Claudius relies on these tools; thanks to their authors and communities.
 | Tool | Purpose |
 |------|---------|
 | [Claude Code](https://code.claude.com/) (Anthropic) | Agentic CLI that talks to the model |
-| [LM Studio](https://lmstudio.ai/) | Local inference server and model runtime — [API](https://lmstudio.ai/docs/api/endpoints/rest), [CLI](https://lmstudio.ai/docs/cli) |
-| [fzf](https://github.com/junegunn/fzf) | Fuzzy finder for model selection (optional) |
-| [gum](https://github.com/charmbracelet/gum) | TUI prompts for menus (optional) |
-| **curl** | HTTP requests to LM Studio |
+| [LM Studio](https://lmstudio.ai/) | Local inference server and model runtime — [API](https://lmstudio.ai/docs/api/endpoints/rest) (list, load with context length), [CLI](https://lmstudio.ai/docs/cli) |
+| **curl** | HTTP requests to LM Studio (list, load) |
 | **jq** or **Python 3** | JSON parsing of model list |
 | **Bash** | Script runtime |
 
