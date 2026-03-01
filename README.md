@@ -1,9 +1,52 @@
 # Claudius
 
+[![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?style=flat&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Claudius is a bootstrapper to run [Claude Code](https://code.claude.com/) (Anthropic's agentic CLI) with local models served by [LM Studio](https://lmstudio.ai/), from the command line. No cloud, no proxy. The name refers to the fourth Roman emperor.
 
 **Author:** Lefteris Iliadis ([Somnius](https://github.com/Somnius))  
 **License:** [MIT](LICENSE)
+
+---
+
+## Installing the tools (for new visitors)
+
+You need **Claude Code** (the CLI) and **LM Studio** (to serve local models). Install them first, then use Claudius to connect the two.
+
+### 1. Install Claude Code
+
+Official docs: **[code.claude.com/docs – Quickstart](https://code.claude.com/docs/en/quickstart)**.
+
+**macOS / Linux / WSL (recommended):**
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+**Homebrew (macOS):**
+
+```bash
+brew install --cask claude-code
+```
+
+**Windows:** See [Quickstart](https://code.claude.com/docs/en/quickstart) for PowerShell / WinGet options.
+
+Check that it works: `claude --version`.
+
+### 2. Install LM Studio
+
+- Download and install from **[lmstudio.ai](https://lmstudio.ai/)**.
+- Open LM Studio, download at least one model, and start the **Local Inference Server** (default port 1234).  
+  Or use the CLI: add `lms` to your PATH (e.g. `~/.lmstudio/bin`) and run `lms server start`.
+
+### 3. Clone and use Claudius
+
+```bash
+git clone https://github.com/Somnius/Claudius-Bootstrapper.git ~/dev/Claudius-Bootstrapper
+```
+
+Add the alias for your shell (see [SHELL-SETUP.md](SHELL-SETUP.md)), then run `claudius` and pick your model.
 
 ---
 
@@ -101,7 +144,18 @@ Override LM Studio URL: `LMSTUDIO_URL=http://127.0.0.1:1234 claudius`.
 - **`claudius` not found** – Run `source ~/.bashrc` or open a new terminal.
 - **Base URL** – Use `http://localhost:1234` with no trailing `/v1`; the script does this.
 
-## Links
+## Thanks & links
 
-- [Claude Code](https://code.claude.com/) (Anthropic)
-- [LM Studio](https://lmstudio.ai/) – [API](https://lmstudio.ai/docs/api/endpoints/rest), [CLI](https://lmstudio.ai/docs/cli)
+Claudius relies on these tools; thanks to their authors and communities.
+
+| Tool | Purpose |
+|------|---------|
+| [Claude Code](https://code.claude.com/) (Anthropic) | Agentic CLI that talks to the model |
+| [LM Studio](https://lmstudio.ai/) | Local inference server and model runtime — [API](https://lmstudio.ai/docs/api/endpoints/rest), [CLI](https://lmstudio.ai/docs/cli) |
+| [fzf](https://github.com/junegunn/fzf) | Fuzzy finder for model selection (optional) |
+| [gum](https://github.com/charmbracelet/gum) | TUI prompts for menus (optional) |
+| **curl** | HTTP requests to LM Studio |
+| **jq** or **Python 3** | JSON parsing of model list |
+| **Bash** | Script runtime |
+
+---
