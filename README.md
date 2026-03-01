@@ -26,7 +26,7 @@ Claudius connects [Claude Code](https://code.claude.com/) (Anthropic’s CLI) to
 | **Run Claude Code** | Starts `claude --model <chosen>`. |
 | **Session on exit** | If you chose not to keep session history, after Claude Code exits you get a menu: delete current session only, purge all (2 confirmations), or purge by age (yesterday, 6h, 3h, 2h, 1h, 30 min), or skip. Only the option you choose runs; nothing is purged automatically. |
 | **`--init`** | Re-ask first-run questions and overwrite saved preferences. |
-| **`--purge`** | Interactive menu to purge saved session data (all with 2 confirmations, or by age). Settings and Claudius prefs are never removed. **No purge runs without explicit user choice for that option.** |
+| **`--purge`** | Interactive menu to purge saved session data: purge all (2 confirmations), purge last session only (~2 min), or purge by age (yesterday, 6h, 3h, 2h, 1h, 30 min). Settings and Claudius prefs are never removed. **No purge runs without explicit user choice for that option.** |
 | **`--dry-run` / `--test`** | Run through server check, model and context selection without writing config or starting Claude. |
 
 Claude Code talks to LM Studio’s Anthropic-compatible API. Claude Code is by [Anthropic](https://www.anthropic.com/); LM Studio by [LM Studio](https://lmstudio.ai/).
@@ -93,7 +93,7 @@ If the script reported missing dependencies (LM Studio or required commands), in
 claudius --purge
 ```
 
-Interactive menu: purge all (with two confirmation prompts), or purge by age (yesterday and back, 6h, 3h, 2h, 1h, 30 min). Does not remove `settings.json` or `claudius-prefs.json`.
+Interactive menu: purge all (with two confirmation prompts), purge last session only (last ~2 min), or purge by age (yesterday and back, 6h, 3h, 2h, 1h, 30 min). Does not remove `settings.json` or `claudius-prefs.json`.
 
 ### Test run (no config write, no Claude)
 
@@ -139,6 +139,7 @@ Override LM Studio URL: `LMSTUDIO_URL=http://127.0.0.1:1234 claudius`.
 
 ## Changelog
 
+- **0.6.2** (2026-03-01) – **`--purge`**: add option “Purge last session only” (last ~2 min). Fix showTurnDuration/keepSessionOnExit: prefs read now outputs lowercase `true`/`false` so `settings.json` gets the correct value (fixes “Cooked for X” not showing when user chose yes). README: troubleshooting for Cursor/VS Code opening extra windows when starting Claude Code.
 - **0.6.1** (2026-03-01) – Before loading the selected model, unload any currently loaded model(s) in LM Studio via `/api/v1/models/unload` to avoid load conflicts and HTTP 500 when switching model or context.
 - **0.6.0** (2026-03-01) – First-time dependency check: on first run (no `claudius-prefs.json`), script checks that LM Studio is installed (e.g. `lms` in PATH) and that required commands (curl, jq or python3, claude) are present. If anything is missing, prints where to download LM Studio and distro-specific install hints for the tools, then tells the user to install and run again with `claudius --init`.
 - **0.5.2** (2026-03-01) – Memory check before load: reads system RAM and GPU VRAM (NVIDIA via `nvidia-smi`, AMD/Intel via sysfs). If estimated need (model + context) exceeds available memory, shows a notice and “Proceed anyway? [y/N]” to reduce accidental HTTP 500 load failures.
@@ -177,6 +178,7 @@ Override LM Studio URL: `LMSTUDIO_URL=http://127.0.0.1:1234 claudius`.
 - **Model load failed (HTTP 500)** – LM Studio could not load the model (e.g. out of memory, corrupt file, unsupported config). The script unloads any previously loaded model before loading; if it still fails, check **LM Studio server logs** for the exact error, try a smaller context length or another model. The script no longer continues to start Claude when load fails.
 - **`claudius` not found** – Run `source ~/.bashrc` or open a new terminal.
 - **Slow or no response** – Curl uses a 10s timeout (`CURL_TIMEOUT`); load can take up to 300s. Use `claudius --dry-run` to test.
+- **Cursor (or VS Code) opens extra windows when starting Claude Code** – This comes from **Claude Code’s IDE integration**, not from Claudius. When the Claude Code extension is installed, starting the CLI (e.g. via `claudius`) can trigger the IDE to open panels or new windows. **Workaround:** run `claudius` from a terminal **outside** Cursor (e.g. a standalone terminal like GNOME Terminal, kitty, Alacritty). Alternatively, disable the Claude Code extension in Cursor when you only want terminal-only use. See [anthropics/claude-code#18205](https://github.com/anthropics/claude-code/issues/18205), [#8768](https://github.com/anthropics/claude-code/issues/8768).
 - **Base URL** – Use `http://localhost:1234` with no trailing `/v1`; the script does this.
 
 ## Thanks & links

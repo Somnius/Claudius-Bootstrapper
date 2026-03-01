@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Claudius v0.6.1 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
+# Claudius v0.6.2 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context length, update config, run claude.
 # Requires: LM Studio (local server on port 1234); jq or Python for JSON; Claude Code CLI.
 
 set -euo pipefail
 
-VERSION="0.6.1"
+VERSION="0.6.2"
 LMSTUDIO_URL="${LMSTUDIO_URL:-http://localhost:1234}"
 LMSTUDIO_API="${LMSTUDIO_URL}/api/v1"
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
@@ -90,29 +90,29 @@ run_init() {
   echo ""
 }
 
-# --- Read showTurnDuration from prefs; default true ---
+# --- Read showTurnDuration from prefs; default true. Must output lowercase "true" or "false" for write_settings. ---
 get_show_turn_duration() {
   if [[ ! -f "$CLAUDIUS_PREFS" ]]; then
     echo "true"
     return
   fi
   if command -v jq &>/dev/null; then
-    jq -r '.showTurnDuration // true | tostring' "$CLAUDIUS_PREFS" 2>/dev/null || echo "true"
+    jq -r '(.showTurnDuration // true) | if . then "true" else "false" end' "$CLAUDIUS_PREFS" 2>/dev/null || echo "true"
   else
-    python3 -c "import json; print(json.load(open('$CLAUDIUS_PREFS')).get('showTurnDuration', True))" 2>/dev/null || echo "true"
+    python3 -c "import json; v=json.load(open('$CLAUDIUS_PREFS')).get('showTurnDuration', True); print('true' if v else 'false')" 2>/dev/null || echo "true"
   fi
 }
 
-# --- Read keepSessionOnExit from prefs; default true ---
+# --- Read keepSessionOnExit from prefs; default true. Output lowercase "true" or "false" for main. ---
 get_keep_session_on_exit() {
   if [[ ! -f "$CLAUDIUS_PREFS" ]]; then
     echo "true"
     return
   fi
   if command -v jq &>/dev/null; then
-    jq -r '.keepSessionOnExit // true | tostring' "$CLAUDIUS_PREFS" 2>/dev/null || echo "true"
+    jq -r '(.keepSessionOnExit // true) | if . then "true" else "false" end' "$CLAUDIUS_PREFS" 2>/dev/null || echo "true"
   else
-    python3 -c "import json; print(json.load(open('$CLAUDIUS_PREFS')).get('keepSessionOnExit', True))" 2>/dev/null || echo "true"
+    python3 -c "import json; v=json.load(open('$CLAUDIUS_PREFS')).get('keepSessionOnExit', True); print('true' if v else 'false')" 2>/dev/null || echo "true"
   fi
 }
 
@@ -190,17 +190,18 @@ run_purge() {
   echo "Claudius — purge saved session data under $CLAUDE_HOME"
   echo ""
   echo "  1) Purge ALL session data (2 verification questions)"
-  echo "  2) Purge all from yesterday and back"
-  echo "  3) Purge all from 6 hours and back"
-  echo "  4) Purge all from 3 hours and back"
-  echo "  5) Purge all from 2 hours and back"
-  echo "  6) Purge all from 1 hour and back"
-  echo "  7) Purge all from 30 minutes and back"
+  echo "  2) Purge last session only (last ~2 min)"
+  echo "  3) Purge all from yesterday and back"
+  echo "  4) Purge all from 6 hours and back"
+  echo "  5) Purge all from 3 hours and back"
+  echo "  6) Purge all from 2 hours and back"
+  echo "  7) Purge all from 1 hour and back"
+  echo "  8) Purge all from 30 minutes and back"
   echo "  q) Cancel"
   echo ""
 
   local choice
-  read -rp "Choose (1-7 or q): " choice
+  read -rp "Choose (1-8 or q): " choice
   case "$choice" in
     q|Q) echo "Cancelled."; return 0 ;;
     1)
@@ -211,12 +212,13 @@ run_purge() {
       purge_session_dirs 1
       echo "  Purged all session data."
       ;;
-    2) purge_yesterday_and_back; echo "  Purged session data from yesterday and back." ;;
-    3) purge_older_than_mins 360; echo "  Purged session data older than 6 hours." ;;
-    4) purge_older_than_mins 180; echo "  Purged session data older than 3 hours." ;;
-    5) purge_older_than_mins 120; echo "  Purged session data older than 2 hours." ;;
-    6) purge_older_than_mins 60;  echo "  Purged session data older than 1 hour." ;;
-    7) purge_older_than_mins 30;  echo "  Purged session data older than 30 minutes." ;;
+    2) purge_session_recent; echo "  Purged last session only." ;;
+    3) purge_yesterday_and_back; echo "  Purged session data from yesterday and back." ;;
+    4) purge_older_than_mins 360; echo "  Purged session data older than 6 hours." ;;
+    5) purge_older_than_mins 180; echo "  Purged session data older than 3 hours." ;;
+    6) purge_older_than_mins 120; echo "  Purged session data older than 2 hours." ;;
+    7) purge_older_than_mins 60;  echo "  Purged session data older than 1 hour." ;;
+    8) purge_older_than_mins 30;  echo "  Purged session data older than 30 minutes." ;;
     *) echo "Invalid choice. No data purged."; return 0 ;;
   esac
   return 0
