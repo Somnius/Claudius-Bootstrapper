@@ -1,0 +1,23 @@
+# Notes and local docs (may contain private/session info)
+NOTES*.md
+notes*.md
+*.sty
+
+# OS and editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Sensitive or machine-specific
+.env
+.env.local
+*.local
+*.secret
+secrets/
+
+# Optional: uncomment if you keep venv or temp here
+# *.venv/
+# __pycache__/
+# *.pyc
