@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Claudius v0.5.0 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
+# Claudius v0.5.1 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context length, update config, run claude.
 # Requires: LM Studio (local server on port 1234); jq or Python for JSON; Claude Code CLI.
 
 set -euo pipefail
 
-VERSION="0.5.0"
+VERSION="0.5.1"
 LMSTUDIO_URL="${LMSTUDIO_URL:-http://localhost:1234}"
 LMSTUDIO_API="${LMSTUDIO_URL}/api/v1"
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
@@ -172,6 +172,45 @@ run_purge() {
     6) purge_older_than_mins 60;  echo "  Purged session data older than 1 hour." ;;
     7) purge_older_than_mins 30;  echo "  Purged session data older than 30 minutes." ;;
     *) echo "Invalid choice."; return 1 ;;
+  esac
+  return 0
+}
+
+# --- After session (when keepSessionOnExit=false): menu to delete current session or purge by age ---
+run_after_session_menu() {
+  echo "Session ended. Delete session data?"
+  echo ""
+  echo "  1) Delete current session only (last ~2 min)"
+  echo "  2) Purge ALL session data (2 verification questions)"
+  echo "  3) Purge all from yesterday and back"
+  echo "  4) Purge all from 6 hours and back"
+  echo "  5) Purge all from 3 hours and back"
+  echo "  6) Purge all from 2 hours and back"
+  echo "  7) Purge all from 1 hour and back"
+  echo "  8) Purge all from 30 minutes and back"
+  echo "  9) Skip (keep everything)"
+  echo ""
+
+  local choice
+  read -rp "Choose (1-9): " choice
+  case "$choice" in
+    1) purge_session_recent; echo "  Deleted current session." ;;
+    2)
+      read -rp "Type YES to confirm purge of ALL session data: " a
+      [[ "${a^^}" != "YES" ]] && echo "Skipped." && return 0
+      read -rp "Type PURGE to confirm again: " b
+      [[ "${b^^}" != "PURGE" ]] && echo "Skipped." && return 0
+      purge_session_dirs 1
+      echo "  Purged all session data."
+      ;;
+    3) purge_yesterday_and_back; echo "  Purged session data from yesterday and back." ;;
+    4) purge_older_than_mins 360; echo "  Purged session data older than 6 hours." ;;
+    5) purge_older_than_mins 180; echo "  Purged session data older than 3 hours." ;;
+    6) purge_older_than_mins 120; echo "  Purged session data older than 2 hours." ;;
+    7) purge_older_than_mins 60;  echo "  Purged session data older than 1 hour." ;;
+    8) purge_older_than_mins 30;  echo "  Purged session data older than 30 minutes." ;;
+    9) echo "  Skipped." ;;
+    *) echo "  Skipped." ;;
   esac
   return 0
 }
@@ -556,8 +595,8 @@ main() {
     exec claude --model "$model_id"
   else
     claude --model "$model_id" || true
-    echo "Clearing session from this run..."
-    purge_session_recent
+    echo ""
+    run_after_session_menu
   fi
 }
 

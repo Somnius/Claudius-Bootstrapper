@@ -12,18 +12,22 @@ Claudius is a bootstrapper to run [Claude Code](https://code.claude.com/) (Anthr
 
 ## What it does
 
-`claudius.sh`:
+Claudius connects [Claude Code](https://code.claude.com/) (Anthropic’s CLI) to local models in [LM Studio](https://lmstudio.ai/) (no cloud, no proxy). Features:
 
-1. On first run (or `claudius --init`), asks whether to show reply duration and whether to **keep session history** when Claude Code exits; saves preferences to `~/.claude/claudius-prefs.json`.
-2. Checks that the LM Studio local server is running (default: `http://localhost:1234`).
-3. If not, offers: Resume (you started it), Start (runs `lms server start`), or Abort.
-4. Fetches the model list from LM Studio (native API: `/api/v1/models`) and shows each model’s max context length.
-5. Lets you pick a model from a numbered menu.
-6. Asks you to choose a **context length** (tokens): suggests 5 values from min to the model’s max, or you can enter a custom number; then loads the model with that context length via LM Studio’s load API and **waits for the load to finish** (spinner; load can take 1–2 min). If load fails, the script exits.
-7. Writes `~/.claude/settings.json` (env, defaultModel, showTurnDuration from prefs) and appends exports to your shell config once if needed.
-8. Runs `claude --model <chosen>`. If you chose not to keep session history, the script clears session data from this run after Claude Code exits.
+| Feature | Description |
+|--------|-------------|
+| **First-run preferences** | Asks whether to show reply duration (“Cooked for X”) and whether to keep session history on exit; saved in `~/.claude/claudius-prefs.json`. |
+| **Server check** | Verifies LM Studio is reachable; offers Resume / Start (`lms server start`) / Abort if not. |
+| **Model list** | Fetches models from LM Studio native API; shows each model’s max context length in a numbered menu. |
+| **Context length** | Lets you pick a context size (5 suggested values or custom); loads the model in LM Studio with that length (spinner until done). |
+| **Config write** | Writes `~/.claude/settings.json` and appends shell exports once so Claude Code talks to LM Studio. |
+| **Run Claude Code** | Starts `claude --model <chosen>`. |
+| **Session on exit** | If you chose not to keep session history, after Claude Code exits you get a menu: delete current session only, purge all (2 confirmations), or purge by age (yesterday, 6h, 3h, 2h, 1h, 30 min), or skip. |
+| **`--init`** | Re-ask first-run questions and overwrite saved preferences. |
+| **`--purge`** | Interactive menu to purge saved session data (all with 2 confirmations, or by age). Settings and Claudius prefs are never removed. |
+| **`--dry-run` / `--test`** | Run through server check, model and context selection without writing config or starting Claude. |
 
-Claude Code talks directly to LM Studio's Anthropic-compatible API. Claude Code is by [Anthropic](https://www.anthropic.com/). LM Studio is by [LM Studio](https://lmstudio.ai/).
+Claude Code talks to LM Studio’s Anthropic-compatible API. Claude Code is by [Anthropic](https://www.anthropic.com/); LM Studio by [LM Studio](https://lmstudio.ai/).
 
 ---
 
@@ -78,29 +82,47 @@ Add the alias for your shell (see [SHELL-SETUP.md](SHELL-SETUP.md)), then run `c
 
 ## Usage
 
-1. Optionally start LM Studio and its Local Inference Server on port 1234 and load a model. Otherwise the script will prompt you.
-2. Run:
+Set up the alias (see [SHELL-SETUP.md](SHELL-SETUP.md)) so `claudius` runs the script, or call the script by path.
 
-   ```bash
-   claudius
-   ```
+### Run Claudius (normal flow)
 
-   Add the alias to your shell config (see [SHELL-SETUP.md](SHELL-SETUP.md)); then run `source` your config or open a new terminal.
+```bash
+claudius
+```
 
-   Or run the script directly:
+Optionally start LM Studio and its Local Inference Server first; otherwise the script will prompt you. Then: choose model → choose context length → script loads the model → Claude Code starts. If you chose not to keep session history, after you exit Claude Code you get a menu to delete the current session, purge by age, or skip.
 
-   ```bash
-   ~/dev/Claudius-Bootstrapper/claudius.sh
-   ```
+### Reset preferences (first-time questions again)
 
-3. If the server was not up, choose 1 (Resume), 2 (Start), or 3 (Abort).
-4. Pick a model from the numbered list (or q to quit).
-5. Choose a context length: pick one of 5 suggested values (min to model max) or enter a custom number; the script loads the model in LM Studio and waits for the load to finish (spinner; may take 1–2 min). If the load fails (e.g. HTTP 500), the script exits and does not start Claude — check LM Studio server logs.
-6. Claude Code starts with the selected model.
+```bash
+claudius --init
+```
 
-**First-time setup:** On first run (or when `~/.claude/claudius-prefs.json` is missing), the script asks whether to show reply duration and whether to keep session history when Claude Code exits, then saves your choices. Run **`claudius --init`** anytime to be asked again and overwrite the saved preferences.
+Re-asks: show reply duration? keep session history on exit? Saves to `~/.claude/claudius-prefs.json`.
 
-**Session purge:** Run **`claudius --purge`** to remove saved Claude Code session data under `~/.claude`. You can purge all (with two confirmation prompts), or purge by age: yesterday and back, 6h, 3h, 2h, 1h, or 30 minutes and back. Settings and Claudius prefs are not removed.
+### Purge saved session data
+
+```bash
+claudius --purge
+```
+
+Interactive menu: purge all (with two confirmation prompts), or purge by age (yesterday and back, 6h, 3h, 2h, 1h, 30 min). Does not remove `settings.json` or `claudius-prefs.json`.
+
+### Test run (no config write, no Claude)
+
+```bash
+claudius --dry-run
+# or
+claudius --test
+```
+
+Runs server check, model selection, and context-length choice, then exits without writing config or starting Claude Code.
+
+### Override LM Studio URL
+
+```bash
+LMSTUDIO_URL=http://127.0.0.1:1234 claudius
+```
 
 ## Alias
 
@@ -130,6 +152,7 @@ Override LM Studio URL: `LMSTUDIO_URL=http://127.0.0.1:1234 claudius`.
 
 ## Changelog
 
+- **0.5.1** (2026-03-01) – When “don’t keep session” is set: after Claude Code exits, show a menu to delete current session only, purge all (2 confirmations), purge by age (yesterday, 6h, 3h, 2h, 1h, 30 min), or skip. README: “What it does” as feature table; Usage lists each command/option with examples.
 - **0.5.0** (2026-03-01) – Session options: first-run asks whether to keep session history when Claude Code exits; if not, session data from that run is cleared after exit. **`claudius --purge`**: interactive menu to purge saved session data — purge all (with 2 confirmations), or by age (yesterday and back, 6h, 3h, 2h, 1h, 30 min). Settings and Claudius prefs are never purged.
 - **0.4.2** (2026-03-01) – First-time setup: ask whether to show reply duration, save to `~/.claude/claudius-prefs.json`; `claudius --init` re-runs these questions. If model load fails (e.g. HTTP 500), script exits and does not start Claude; user is told to check LM Studio logs.
 - **0.4.1** (2026-03-01) – After setting context length, wait for model load to finish with a spinner; show load time when returned by API. Then start Claude.

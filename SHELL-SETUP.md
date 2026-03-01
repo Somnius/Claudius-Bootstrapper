@@ -97,4 +97,4 @@ If your `sh` does not load aliases, run the script by path:
 
 Use the path where you actually cloned the repo (e.g. `$HOME/dev/Claudius-Bootstrapper/claudius.sh`) if it differs from `~/dev/Claudius-Bootstrapper`.
 
-**Options:** `claudius --init` to reset preferences (turn duration, keep session). `claudius --purge` to clear saved Claude Code session data by age or entirely.
+**Options:** `claudius --init` — reset preferences (turn duration, keep session). `claudius --purge` — clear saved Claude Code session data (all, or by age). `claudius --dry-run` / `--test` — test flow without writing config or starting Claude. If you chose not to keep session history, after Claude Code exits you get a menu to delete current session, purge by age, or skip.
