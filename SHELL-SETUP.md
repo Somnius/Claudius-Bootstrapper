@@ -96,3 +96,5 @@ If your `sh` does not load aliases, run the script by path:
 | sh    | `~/.profile` or `~/.shrc` | New login shell or `source` that file |
 
 Use the path where you actually cloned the repo (e.g. `$HOME/dev/Claudius-Bootstrapper/claudius.sh`) if it differs from `~/dev/Claudius-Bootstrapper`.
+
+**Options:** `claudius --init` to reset preferences (turn duration, keep session). `claudius --purge` to clear saved Claude Code session data by age or entirely.

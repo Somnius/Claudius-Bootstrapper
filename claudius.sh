@@ -1,19 +1,180 @@
 #!/usr/bin/env bash
-# Claudius v0.4.1 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
+# Claudius v0.5.0 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context length, update config, run claude.
 # Requires: LM Studio (local server on port 1234); jq or Python for JSON; Claude Code CLI.
 
 set -euo pipefail
 
-VERSION="0.4.1"
+VERSION="0.5.0"
 LMSTUDIO_URL="${LMSTUDIO_URL:-http://localhost:1234}"
 LMSTUDIO_API="${LMSTUDIO_URL}/api/v1"
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
+CLAUDIUS_PREFS="${HOME}/.claude/claudius-prefs.json"
+CLAUDE_HOME="${HOME}/.claude"
 BASHRC="${HOME}/.bashrc"
+
+# Session-related paths under ~/.claude to purge (do not include settings.json or claudius-prefs.json)
+SESSION_DIRS="projects debug file-history tasks todos plans shell-snapshots session-env paste-cache"
 
 # Curl timeout: connect + max total (avoid hanging)
 CURL_TIMEOUT="${CURL_TIMEOUT:-10}"
+
+# --- First-time / --init: ask preferences and save to CLAUDIUS_PREFS ---
+run_init() {
+  echo "Claudius first-time setup (preferences saved to $CLAUDIUS_PREFS)"
+  echo ""
+
+  local show_turn="y"
+  read -rp "Show reply duration after each response (e.g. 'Cooked for 1m 6s')? [Y/n]: " show_turn
+  show_turn="${show_turn:-y}"
+  local show_turn_bool=true
+  [[ "${show_turn,,}" == "n" || "${show_turn,,}" == "no" ]] && show_turn_bool=false
+
+  local keep_sess="y"
+  read -rp "Keep session history when Claude Code exits? [Y/n]: " keep_sess
+  keep_sess="${keep_sess:-y}"
+  local keep_sess_bool=true
+  [[ "${keep_sess,,}" == "n" || "${keep_sess,,}" == "no" ]] && keep_sess_bool=false
+
+  mkdir -p "$(dirname "$CLAUDIUS_PREFS")"
+  if command -v jq &>/dev/null; then
+    jq -n \
+      --arg st "$show_turn_bool" --arg ks "$keep_sess_bool" \
+      '{showTurnDuration: ($st == "true"), keepSessionOnExit: ($ks == "true")}' > "$CLAUDIUS_PREFS"
+  else
+    printf '%s\n' "{\"showTurnDuration\": $show_turn_bool, \"keepSessionOnExit\": $keep_sess_bool}" > "$CLAUDIUS_PREFS"
+  fi
+  echo "  Saved. Run claudius --init again anytime to change these."
+  echo ""
+}
+
+# --- Read showTurnDuration from prefs; default true ---
+get_show_turn_duration() {
+  if [[ ! -f "$CLAUDIUS_PREFS" ]]; then
+    echo "true"
+    return
+  fi
+  if command -v jq &>/dev/null; then
+    jq -r '.showTurnDuration // true | tostring' "$CLAUDIUS_PREFS" 2>/dev/null || echo "true"
+  else
+    python3 -c "import json; print(json.load(open('$CLAUDIUS_PREFS')).get('showTurnDuration', True))" 2>/dev/null || echo "true"
+  fi
+}
+
+# --- Read keepSessionOnExit from prefs; default true ---
+get_keep_session_on_exit() {
+  if [[ ! -f "$CLAUDIUS_PREFS" ]]; then
+    echo "true"
+    return
+  fi
+  if command -v jq &>/dev/null; then
+    jq -r '.keepSessionOnExit // true | tostring' "$CLAUDIUS_PREFS" 2>/dev/null || echo "true"
+  else
+    python3 -c "import json; print(json.load(open('$CLAUDIUS_PREFS')).get('keepSessionOnExit', True))" 2>/dev/null || echo "true"
+  fi
+}
+
+# --- Purge session data: delete files in SESSION_DIRS and optionally history.jsonl ---
+# Usage: purge_session_dirs [optional: also_clear_history 1]
+# If also_clear_history=1, truncate/remove history.jsonl.
+purge_session_dirs() {
+  local also_history="${1:-0}"
+  local d
+  for d in $SESSION_DIRS; do
+    [[ -d "${CLAUDE_HOME}/${d}" ]] && rm -rf "${CLAUDE_HOME}/${d}"/*
+  done
+  if [[ "$also_history" == "1" ]] && [[ -f "${CLAUDE_HOME}/history.jsonl" ]]; then
+    : > "${CLAUDE_HOME}/history.jsonl"
+  fi
+}
+
+# --- Purge session files older than N minutes (mtime < now - N min) ---
+purge_older_than_mins() {
+  local mins="$1"
+  [[ -z "$mins" || ! "$mins" =~ ^[0-9]+$ ]] && return 1
+  local d
+  for d in $SESSION_DIRS; do
+    [[ -d "${CLAUDE_HOME}/${d}" ]] || continue
+    find "${CLAUDE_HOME}/${d}" -type f -mmin "+${mins}" -delete 2>/dev/null || true
+    find "${CLAUDE_HOME}/${d}" -type d -empty -delete 2>/dev/null || true
+  done
+  # history.jsonl: remove lines with timestamp older than N min (timestamp is ms)
+  if [[ -f "${CLAUDE_HOME}/history.jsonl" ]]; then
+    local cutoff_ms
+    cutoff_ms=$(($(date +%s) * 1000 - mins * 60 * 1000))
+    if command -v jq &>/dev/null; then
+      jq -c --argjson c "$cutoff_ms" 'select(.timestamp >= $c)' "${CLAUDE_HOME}/history.jsonl" 2>/dev/null > "${CLAUDE_HOME}/history.jsonl.tmp" && mv "${CLAUDE_HOME}/history.jsonl.tmp" "${CLAUDE_HOME}/history.jsonl"
+    else
+      python3 -c "
+import sys, json
+cutoff = $cutoff_ms
+with open('${CLAUDE_HOME}/history.jsonl') as f:
+    lines = [l for l in f if l.strip() and json.loads(l).get('timestamp', 0) >= cutoff]
+with open('${CLAUDE_HOME}/history.jsonl', 'w') as f:
+    f.writelines(lines)
+" 2>/dev/null || true
+    fi
+  fi
+}
+
+# --- Purge session files from yesterday and back (mtime before today 00:00) ---
+purge_yesterday_and_back() {
+  local now_sec today_start_sec mins
+  now_sec=$(date +%s)
+  today_start_sec=$(python3 -c "from datetime import datetime; d=datetime.now().replace(hour=0,minute=0,second=0,microsecond=0); print(int(d.timestamp()))" 2>/dev/null) || today_start_sec=0
+  mins=$(( (now_sec - today_start_sec) / 60 ))
+  [[ "$mins" -lt 1 ]] && mins=1
+  purge_older_than_mins "$mins"
+}
+
+# --- Purge recent session (last 2 min) - used after exit when keepSessionOnExit=false ---
+purge_session_recent() {
+  # Delete files modified in the last 2 minutes (current session)
+  local d
+  for d in $SESSION_DIRS; do
+    [[ -d "${CLAUDE_HOME}/${d}" ]] || continue
+    find "${CLAUDE_HOME}/${d}" -type f -mmin -2 -delete 2>/dev/null || true
+    find "${CLAUDE_HOME}/${d}" -type d -empty -delete 2>/dev/null || true
+  done
+}
+
+# --- --purge: interactive menu, then run chosen purge ---
+run_purge() {
+  echo "Claudius — purge saved session data under $CLAUDE_HOME"
+  echo ""
+  echo "  1) Purge ALL session data (2 verification questions)"
+  echo "  2) Purge all from yesterday and back"
+  echo "  3) Purge all from 6 hours and back"
+  echo "  4) Purge all from 3 hours and back"
+  echo "  5) Purge all from 2 hours and back"
+  echo "  6) Purge all from 1 hour and back"
+  echo "  7) Purge all from 30 minutes and back"
+  echo "  q) Cancel"
+  echo ""
+
+  local choice
+  read -rp "Choose (1-7 or q): " choice
+  case "$choice" in
+    q|Q) echo "Cancelled."; return 0 ;;
+    1)
+      read -rp "Type YES to confirm purge of ALL session data: " a
+      [[ "${a^^}" != "YES" ]] && echo "Cancelled." && return 0
+      read -rp "Type PURGE to confirm again: " b
+      [[ "${b^^}" != "PURGE" ]] && echo "Cancelled." && return 0
+      purge_session_dirs 1
+      echo "  Purged all session data."
+      ;;
+    2) purge_yesterday_and_back; echo "  Purged session data from yesterday and back." ;;
+    3) purge_older_than_mins 360; echo "  Purged session data older than 6 hours." ;;
+    4) purge_older_than_mins 180; echo "  Purged session data older than 3 hours." ;;
+    5) purge_older_than_mins 120; echo "  Purged session data older than 2 hours." ;;
+    6) purge_older_than_mins 60;  echo "  Purged session data older than 1 hour." ;;
+    7) purge_older_than_mins 30;  echo "  Purged session data older than 30 minutes." ;;
+    *) echo "Invalid choice."; return 1 ;;
+  esac
+  return 0
+}
 
 # --- Check if LM Studio server is reachable ---
 check_server() {
@@ -241,6 +402,8 @@ load_model_with_context() {
 # --- Update ~/.claude/settings.json ---
 write_settings() {
   local model_id="$1"
+  local show_turn
+  show_turn=$(get_show_turn_duration)
   local schema="https://json.schemastore.org/claude-code-settings.json"
   local base_url="http://localhost:1234"
   local tmp
@@ -250,7 +413,8 @@ write_settings() {
       --arg schema "$schema" \
       --arg base "$base_url" \
       --arg model "$model_id" \
-      '{"$schema": $schema, "env": {"ANTHROPIC_BASE_URL": $base, "ANTHROPIC_AUTH_TOKEN": "lmstudio", "ANTHROPIC_API_KEY": ""}, "defaultModel": $model}' \
+      --arg show_turn "$show_turn" \
+      '{"$schema": $schema, "env": {"ANTHROPIC_BASE_URL": $base, "ANTHROPIC_AUTH_TOKEN": "lmstudio", "ANTHROPIC_API_KEY": ""}, "defaultModel": $model, "showTurnDuration": ($show_turn == "true")}' \
       > "$tmp"
   else
     python3 -c "
@@ -262,7 +426,8 @@ print(json.dumps({
         \"ANTHROPIC_AUTH_TOKEN\": \"lmstudio\",
         \"ANTHROPIC_API_KEY\": \"\"
     },
-    \"defaultModel\": \"$model_id\"
+    \"defaultModel\": \"$model_id\",
+    \"showTurnDuration\": ($show_turn == \"true\")
 }, indent=2))
 " > "$tmp"
   fi
@@ -326,6 +491,21 @@ main() {
   local dry_run=0
   [[ "${1:-}" == "--dry-run" || "${1:-}" == "--test" ]] && dry_run=1 && shift
 
+  # --purge: interactive purge menu, then exit
+  if [[ "${1:-}" == "--purge" ]]; then
+    run_purge
+    exit 0
+  fi
+
+  # --init: (re)run first-time setup questions and save preferences
+  if [[ "${1:-}" == "--init" ]]; then
+    run_init
+    shift
+  fi
+  if [[ ! -f "$CLAUDIUS_PREFS" ]]; then
+    run_init
+  fi
+
   echo "Claudius v${VERSION} - Claude Code + LM Studio (direct)"
   echo "LM Studio URL: $LMSTUDIO_URL"
   [[ "$dry_run" -eq 1 ]] && echo "(dry-run: will not write config or start claude)"
@@ -355,7 +535,12 @@ main() {
   fi
 
   echo "Loading model in LM Studio..."
-  load_model_with_context "$model_id" "$context_length" || true
+  if ! load_model_with_context "$model_id" "$context_length"; then
+    echo ""
+    echo "Model load failed. Check LM Studio server logs for details (e.g. out of memory, missing file)."
+    echo "Fix the issue and run claudius again, or choose another model/context length."
+    exit 1
+  fi
 
   echo "Writing config..."
   write_settings "$model_id"
@@ -364,7 +549,16 @@ main() {
 
   echo "Starting Claude Code..."
   echo ""
-  exec claude --model "$model_id"
+
+  local keep_sess
+  keep_sess=$(get_keep_session_on_exit)
+  if [[ "$keep_sess" == "true" ]]; then
+    exec claude --model "$model_id"
+  else
+    claude --model "$model_id" || true
+    echo "Clearing session from this run..."
+    purge_session_recent
+  fi
 }
 
 main "$@"
