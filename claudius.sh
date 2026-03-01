@@ -56,7 +56,7 @@ check_required_commands() {
   echo "  curl:    apt install curl   (Debian/Ubuntu/PikaOS)  |  dnf install curl   (Fedora)  |  pacman -S curl   (Arch)"
   echo "  jq:      apt install jq     (Debian/Ubuntu/PikaOS)  |  dnf install jq     (Fedora)  |  pacman -S jq     (Arch)"
   echo "  python3: usually preinstalled; if not: apt/dnf/pacman install python3"
-  echo "  claude:  install from https://code.claude.com/docs (e.g. curl -fsSL https://claude.ai/install.sh | bash)"
+  echo "  claude:  see https://code.claude.com/docs for install instructions (Quickstart / your platform)"
   echo ""
   return 1
 }

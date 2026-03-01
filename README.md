@@ -48,23 +48,7 @@ You need **Claude Code** (the CLI) and **LM Studio** (to serve local models). In
 
 ### 1. Install Claude Code
 
-Official docs: **[code.claude.com/docs – Quickstart](https://code.claude.com/docs/en/quickstart)**.
-
-**macOS / Linux / WSL (recommended):**
-
-```bash
-curl -fsSL https://claude.ai/install.sh | bash
-```
-
-**Homebrew (macOS):**
-
-```bash
-brew install --cask claude-code
-```
-
-**Windows:** See [Quickstart](https://code.claude.com/docs/en/quickstart) for PowerShell / WinGet options.
-
-Check that it works: `claude --version`.
+Go to **[code.claude.com/docs](https://code.claude.com/docs)** (e.g. Quickstart) and follow the install instructions for your platform. Install methods may change; the official docs are the place to check. After installing, confirm with: `claude --version`.
 
 ### 2. Install LM Studio
 
