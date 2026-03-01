@@ -10,6 +10,31 @@ Claudius is a bootstrapper to run [Claude Code](https://code.claude.com/) (Anthr
 
 ---
 
+## What it does
+
+`claudius.sh`:
+
+1. Checks that the LM Studio local server is running (default: `http://localhost:1234`).
+2. If not, offers: Resume (you started it), Start (runs `lms server start`), or Abort.
+3. Fetches the model list from LM Studio (`/v1/models`).
+4. Lets you pick a model: with **fzf** or **gum** if installed, otherwise a numbered menu.
+5. Writes `~/.claude/settings.json` (env and defaultModel) and appends exports to your shell config once if needed.
+6. Runs `claude --model <chosen>`.
+
+Claude Code talks directly to LM Studio's Anthropic-compatible API. Claude Code is by [Anthropic](https://www.anthropic.com/). LM Studio is by [LM Studio](https://lmstudio.ai/).
+
+---
+
+## Prerequisites
+
+- [LM Studio](https://lmstudio.ai/) installed, at least one model loaded.
+- LM Studio local server (Local Inference Server in the app), or the `lms` CLI so the script can try to start it.
+- [Claude Code](https://code.claude.com/) CLI on your PATH.
+- `curl`, and either `jq` or Python 3 for JSON.
+- Optional: [fzf](https://github.com/junegunn/fzf) or [gum](https://github.com/charmbracelet/gum) for a nicer model picker.
+
+---
+
 ## Installing the tools (for new visitors)
 
 You need **Claude Code** (the CLI) and **LM Studio** (to serve local models). Install them first, then use Claudius to connect the two.
@@ -49,27 +74,6 @@ git clone https://github.com/Somnius/Claudius-Bootstrapper.git ~/dev/Claudius-Bo
 Add the alias for your shell (see [SHELL-SETUP.md](SHELL-SETUP.md)), then run `claudius` and pick your model.
 
 ---
-
-## What it does
-
-`claudius.sh`:
-
-1. Checks that the LM Studio local server is running (default: `http://localhost:1234`).
-2. If not, offers: Resume (you started it), Start (runs `lms server start`), or Abort.
-3. Fetches the model list from LM Studio (`/v1/models`).
-4. Lets you pick a model: with **fzf** or **gum** if installed, otherwise a numbered menu.
-5. Writes `~/.claude/settings.json` (env and defaultModel) and appends exports to `~/.bashrc` once if needed.
-6. Runs `claude --model <chosen>`.
-
-Claude Code talks directly to LM Studio's Anthropic-compatible API. Claude Code is by [Anthropic](https://www.anthropic.com/). LM Studio is by [LM Studio](https://lmstudio.ai/).
-
-## Prerequisites
-
-- [LM Studio](https://lmstudio.ai/) installed, at least one model loaded.
-- LM Studio local server (Local Inference Server in the app), or the `lms` CLI so the script can try to start it.
-- [Claude Code](https://code.claude.com/) CLI on your PATH.
-- `curl`, and either `jq` or Python 3 for JSON.
-- Optional: [fzf](https://github.com/junegunn/fzf) or [gum](https://github.com/charmbracelet/gum) for a nicer model picker.
 
 ## Usage
 
