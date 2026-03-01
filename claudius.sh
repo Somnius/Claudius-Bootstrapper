@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Claudius v0.3.2 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
+# Claudius v0.3.3 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, update config, run claude.
 # Requires: LM Studio (local server on port 1234); jq or Python for JSON; Claude Code CLI.
@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-VERSION="0.3.2"
+VERSION="0.3.3"
 LMSTUDIO_URL="${LMSTUDIO_URL:-http://localhost:1234}"
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
 BASHRC="${HOME}/.bashrc"

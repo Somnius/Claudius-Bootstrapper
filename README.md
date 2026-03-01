@@ -37,12 +37,12 @@ Claude Code talks directly to LM Studio's Anthropic-compatible API. Claude Code 
    claudius
    ```
 
-   The alias is set in `~/.bashrc` to `~/scripts/claude/claudius.sh`. Run `source ~/.bashrc` (or open a new terminal) if you just added it.
+   Add the alias to your shell config (see [SHELL-SETUP.md](SHELL-SETUP.md)); then run `source` your config or open a new terminal.
 
    Or run the script directly:
 
    ```bash
-   ~/scripts/claude/claudius.sh
+   ~/dev/Claudius-Bootstrapper/claudius.sh
    ```
 
 3. If the server was not up, choose 1 (Resume), 2 (Start), or 3 (Abort).
@@ -51,28 +51,29 @@ Claude Code talks directly to LM Studio's Anthropic-compatible API. Claude Code 
 
 ## Alias
 
-In `~/.bashrc`:
+In `~/.bashrc` (adjust path if you cloned elsewhere):
 
 ```bash
-alias claudius='~/scripts/claude/claudius.sh'
+alias claudius='~/dev/Claudius-Bootstrapper/claudius.sh'
 ```
 
-Then `source ~/.bashrc` or open a new shell.
+Then `source ~/.bashrc` or open a new shell. For **zsh**, **fish**, **ksh**, and **sh**, see [SHELL-SETUP.md](SHELL-SETUP.md).
 
 ## Configuration
 
 | What          | Where                     |
 |---------------|----------------------------|
 | Base URL, env | `~/.claude/settings.json`  |
-| Shell exports | `~/.bashrc`                |
-| Default model| `defaultModel` in settings |
+| Shell exports | your shell config (see [SHELL-SETUP.md](SHELL-SETUP.md)) |
+| Default model | `defaultModel` in settings |
 
-See `settings.json.example` in this repo for a template; copy to `~/.claude/settings.json` and set `defaultModel` to your LM Studio model id (e.g. from `curl -s http://localhost:1234/v1/models`).
+**Settings template:** Copy [settings.json.example](settings.json.example) to `~/.claude/settings.json` and set `defaultModel` to your LM Studio model id (e.g. from `curl -s http://localhost:1234/v1/models`). The script can also create this file when you pick a model.
 
 Override LM Studio URL: `LMSTUDIO_URL=http://127.0.0.1:1234 claudius`.
 
 ## Changelog
 
+- **0.3.3** (2026-03-01) – README: project files table, config section references SHELL-SETUP.md and settings.json.example.
 - **0.3.2** (2026-03-01) – Server-down menu uses gum or fzf when available; `settings.json.example` template; README config note.
 - **0.3.1** (2026-03-01) – Model list fixed (menu to stderr). Optional fzf/gum for model selection. Version and author in script. README, LICENSE, .gitignore for public repo.
 - **0.3.0** – Rename project to Claudius; script to `claudius.sh`; add `claudius` alias in `.bashrc`.
@@ -81,15 +82,16 @@ Override LM Studio URL: `LMSTUDIO_URL=http://127.0.0.1:1234 claudius`.
 - **0.1.x** – LiteLLM proxy path fixes, venv and launcher fixes for moved `~/scripts/claude/` layout.
 - **0.1.0** – Initial bootstrapper: LM Studio + Claude Code via proxy; env and model selection.
 
-## Files
+## Project files
 
-| File                    | Description                                      |
-|-------------------------|--------------------------------------------------|
-| `claudius.sh`           | Bootstrapper script                              |
-| `settings.json.example` | Template for `~/.claude/settings.json` (copy & edit) |
-| `README.md`             | This file                                        |
-| `LICENSE`               | MIT license                                      |
-| `.gitignore`            | Ignore notes, local/sensitive                    |
+| File                    | Description                                                |
+|-------------------------|------------------------------------------------------------|
+| `claudius.sh`           | Bootstrapper script                                        |
+| [SHELL-SETUP.md](SHELL-SETUP.md) | How to add the `claudius` alias on **bash**, **zsh**, **fish**, **ksh**, and **sh** |
+| [settings.json.example](settings.json.example) | Example `~/.claude/settings.json` — copy to `~/.claude/settings.json` and set `defaultModel` |
+| `README.md`             | This file                                                  |
+| `LICENSE`               | MIT license                                                |
+| `.gitignore`            | Ignore notes, local/sensitive                              |
 
 ## Troubleshooting
 
