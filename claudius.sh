@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Claudius v0.6.0 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
+# Claudius v0.6.1 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context length, update config, run claude.
 # Requires: LM Studio (local server on port 1234); jq or Python for JSON; Claude Code CLI.
 
 set -euo pipefail
 
-VERSION="0.6.0"
+VERSION="0.6.1"
 LMSTUDIO_URL="${LMSTUDIO_URL:-http://localhost:1234}"
 LMSTUDIO_API="${LMSTUDIO_URL}/api/v1"
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
@@ -318,6 +318,42 @@ wait_for_server() {
   done
 }
 
+# --- Unload any currently loaded model(s) in LM Studio (avoids load conflicts / HTTP 500) ---
+unload_loaded_models() {
+  local resp ids id
+  resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${LMSTUDIO_API}/models" 2>/dev/null) || true
+  [[ -z "$resp" ]] && return 0
+  ids=()
+  if command -v jq &>/dev/null; then
+    while IFS= read -r id; do
+      [[ -n "$id" ]] && ids+=("$id")
+    done < <(echo "$resp" | jq -r '.models[]?.loaded_instances[]?.id // empty' 2>/dev/null)
+  else
+    while IFS= read -r id; do
+      [[ -n "$id" ]] && ids+=("$id")
+    done < <(echo "$resp" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    for m in d.get('models', []):
+        for inst in m.get('loaded_instances', []):
+            i = inst.get('id')
+            if i: print(i)
+except Exception: pass
+" 2>/dev/null)
+  fi
+  if [[ ${#ids[@]} -eq 0 ]]; then
+    return 0
+  fi
+  echo "  Unloading previous model(s)..."
+  for id in "${ids[@]}"; do
+    curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time 30 \
+      -X POST -H "Content-Type: application/json" \
+      -d "{\"instance_id\": \"${id}\"}" \
+      "${LMSTUDIO_API}/models/unload" 2>/dev/null || true
+  done
+}
+
 # --- Fetch model list from LM Studio (native API: key and max_context_length) ---
 # Output: one line per LLM: "key|max_context_length"
 fetch_models() {
@@ -585,9 +621,11 @@ wait_with_spinner() {
 }
 
 # --- Load model with given context length via LM Studio API; show spinner until load finishes ---
+# Unloads any currently loaded model(s) first to avoid load conflicts (e.g. HTTP 500).
 load_model_with_context() {
   local model_key="$1" context_length="$2"
   local tmp resp body code
+  unload_loaded_models
   tmp=$(mktemp)
   (
     curl -s -w "\n%{http_code}" --connect-timeout 2 --max-time 300 \

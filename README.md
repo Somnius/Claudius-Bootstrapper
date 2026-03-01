@@ -20,7 +20,7 @@ Claudius connects [Claude Code](https://code.claude.com/) (Anthropic’s CLI) to
 | **First-run preferences** | Asks whether to show reply duration (“Cooked for X”) and whether to keep session history on exit; saved in `~/.claude/claudius-prefs.json`. |
 | **Server check** | Verifies LM Studio is reachable; offers Resume / Start (`lms server start`) / Abort if not. |
 | **Model list** | Fetches models from LM Studio native API; shows each model’s max context length in a numbered menu. |
-| **Context length** | Lets you pick a context size (5 suggested values or custom); loads the model in LM Studio with that length (spinner until done). |
+| **Context length** | Lets you pick a context size (5 suggested values or custom). Before loading, the script unloads any model already loaded in LM Studio (via `POST /api/v1/models/unload`), then loads the selected model with that length (spinner until done). |
 | **Memory check** | Before loading, checks system RAM and GPU VRAM (NVIDIA, AMD, Intel). If estimated need exceeds available memory, shows a notice and asks “Proceed anyway? [y/N]” to avoid accidental load failures (e.g. HTTP 500). |
 | **Config write** | Writes `~/.claude/settings.json` and appends shell exports once so Claude Code talks to LM Studio. |
 | **Run Claude Code** | Starts `claude --model <chosen>`. |
@@ -139,6 +139,7 @@ Override LM Studio URL: `LMSTUDIO_URL=http://127.0.0.1:1234 claudius`.
 
 ## Changelog
 
+- **0.6.1** (2026-03-01) – Before loading the selected model, unload any currently loaded model(s) in LM Studio via `/api/v1/models/unload` to avoid load conflicts and HTTP 500 when switching model or context.
 - **0.6.0** (2026-03-01) – First-time dependency check: on first run (no `claudius-prefs.json`), script checks that LM Studio is installed (e.g. `lms` in PATH) and that required commands (curl, jq or python3, claude) are present. If anything is missing, prints where to download LM Studio and distro-specific install hints for the tools, then tells the user to install and run again with `claudius --init`.
 - **0.5.2** (2026-03-01) – Memory check before load: reads system RAM and GPU VRAM (NVIDIA via `nvidia-smi`, AMD/Intel via sysfs). If estimated need (model + context) exceeds available memory, shows a notice and “Proceed anyway? [y/N]” to reduce accidental HTTP 500 load failures.
 - **0.5.1** (2026-03-01) – When “don’t keep session” is set: after Claude Code exits, show a menu to delete current session only, purge all (2 confirmations), purge by age (yesterday, 6h, 3h, 2h, 1h, 30 min), or skip. README: “What it does” as feature table; Usage lists each command/option with examples.
@@ -173,7 +174,7 @@ Override LM Studio URL: `LMSTUDIO_URL=http://127.0.0.1:1234 claudius`.
 - **Memory check / “Proceed anyway?”** – The script estimates RAM + VRAM need from model size and context length. If you see the notice, try a smaller context length (e.g. 2048 or 34304) to avoid LM Studio load failures. GPU detection: NVIDIA uses `nvidia-smi`; AMD and Intel (including Arc) use `/sys/class/drm` when the driver exposes VRAM info; if no GPU is detected, only system RAM is considered.
 - **`lms` not found** – Add LM Studio’s CLI to PATH (e.g. `~/.lmstudio/bin`) or start the server from the GUI.
 - **No models** – Load at least one model in LM Studio and ensure the server is running. The script uses the native list API (`/api/v1/models`).
-- **Model load failed (HTTP 500)** – LM Studio could not load the model (e.g. out of memory, corrupt file, unsupported config). Check **LM Studio server logs** for the exact error; try a smaller context length or another model. The script no longer continues to start Claude when load fails.
+- **Model load failed (HTTP 500)** – LM Studio could not load the model (e.g. out of memory, corrupt file, unsupported config). The script unloads any previously loaded model before loading; if it still fails, check **LM Studio server logs** for the exact error, try a smaller context length or another model. The script no longer continues to start Claude when load fails.
 - **`claudius` not found** – Run `source ~/.bashrc` or open a new terminal.
 - **Slow or no response** – Curl uses a 10s timeout (`CURL_TIMEOUT`); load can take up to 300s. Use `claudius --dry-run` to test.
 - **Base URL** – Use `http://localhost:1234` with no trailing `/v1`; the script does this.
