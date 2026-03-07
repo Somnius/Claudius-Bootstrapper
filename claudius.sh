@@ -1,12 +1,48 @@
 #!/usr/bin/env bash
-# Claudius v0.6.2 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
+# Claudius v0.7.1 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context length, update config, run claude.
 # Requires: LM Studio (local server on port 1234); jq or Python for JSON; Claude Code CLI.
 
 set -euo pipefail
 
-VERSION="0.6.2"
+VERSION="0.7.1"
+
+# --help function: Display usage information
+print_help() {
+  cat << 'EOF'
+Usage: claudius [OPTIONS]
+
+Claudius v0.7.1 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor)
+
+Connects Claude Code (Anthropic's agentic CLI) to local models served by LM Studio.
+No cloud, no proxy.
+
+Options:
+  --help, -h    Show this help message and exit
+  --init        Reset preferences (show reply duration, keep session history)
+  --purge       Interactive menu to purge saved Claude Code session data
+  --dry-run     Test flow (server check, model/context selection) without writing config or starting Claude
+  --test        Alias for --dry-run
+
+Environment Variables:
+  LMSTUDIO_URL  Override default LM Studio URL (default: http://localhost:1234)
+
+Examples:
+  claudius                          # Run full flow: select model, load, start Claude
+  claudius --init                   # Reset preferences after installing missing dependencies
+  claudius --purge                  # Clear session data interactively  
+  claudius --dry-run                # Test without writing config
+  
+Notes:
+  - Requires LM Studio with at least one model loaded
+  - First run creates ~/.claude/settings.json and updates your shell exports
+  - Run "claudius --purge" to clear session history under ~/.claude/
+
+For more info: https://github.com/Somnius/Claudius-Bootstrapper
+EOF
+}
+
 LMSTUDIO_URL="${LMSTUDIO_URL:-http://localhost:1234}"
 LMSTUDIO_API="${LMSTUDIO_URL}/api/v1"
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
@@ -272,7 +308,18 @@ check_server() {
 }
 
 # --- Prompt when server is not running: Resume / Try start / Abort ---
+# Also shows currently loaded model(s) if any
 wait_for_server() {
+  local current_loaded=""
+  local loaded_json=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${LMSTUDIO_API}/models" 2>/dev/null) || true
+  if [[ -n "${loaded_json}" ]]; then
+    # Get first loaded instance ID
+    current_loaded=$(echo "$loaded_json" | jq -r '.models[]?.loaded_instances[]?.id // empty' 2>/dev/null | head -1)
+    if [[ -n "${current_loaded}" ]]; then
+      echo "  Currently loaded: ${current_loaded} (will be unloaded before switching)" >&2
+    fi
+  fi
+  
   echo "LM Studio server is not running at ${LMSTUDIO_URL}."
   echo ""
   echo "  1) Resume  - I've started the server; check again."
@@ -593,10 +640,22 @@ check_memory_and_confirm() {
     echo "  GPU: none detected (using system RAM only)" >&2
   fi
   echo "  Estimated need for this model + context: ~${req_mb} MB" >&2
+  
+  # Calculate headroom and show hint
+  local headroom=$(( total_available_mb - req_mb ))
+  local headroom_pct=0
+  if [[ "$total_available_mb" -gt 0 ]]; then
+    headroom_pct=$(( (headroom * 100) / total_available_mb ))
+  fi
+  
   echo "" >&2
 
   if [[ "$total_available_mb" -ge "$req_mb" ]]; then
-    echo "  OK: sufficient memory detected." >&2
+    if [[ "$headroom_pct" -lt 20 ]]; then
+      echo "  HINT: Low memory headroom (${headroom_pct}%). Consider reducing context length." >&2
+    else
+      echo "  OK: sufficient memory detected with comfortable headroom for KV cache growth." >&2
+    fi
     return 0
   fi
 
@@ -683,7 +742,7 @@ print(json.dumps({
         \"ANTHROPIC_API_KEY\": \"\"
     },
     \"defaultModel\": \"$model_id\",
-    \"showTurnDuration\": ($show_turn == \"true\")
+    \"showTurnDuration\": ($show_turn == "true")
 }, indent=2))
 " > "$tmp"
   fi
@@ -744,6 +803,9 @@ verify_and_export() {
 
 # --- Main ---
 main() {
+  local dry_run=0
+  [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && print_help && exit 0
+
   local dry_run=0
   [[ "${1:-}" == "--dry-run" || "${1:-}" == "--test" ]] && dry_run=1 && shift
 

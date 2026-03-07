@@ -152,6 +152,7 @@ Override LM Studio URL: `LMSTUDIO_URL=http://127.0.0.1:1234 claudius`.
 
 ## Changelog
 
+- **0.7.1** (2026-03-07) – **New: `--help` command** and **Enhanced memory headroom hints**: Display helpful usage information with `claudius --help` or `-h`. Improved model status display when server is not running (shows currently loaded model ID). Enhanced memory check now shows comfortable vs low headroom hints (warns below 20% remaining for KV cache growth). Version bumped to 0.7.1.
 - **0.7.0** (2026-03-07) – **VS Code chat panel integration**: Add guide and documentation for using the Claude Code extension in VS Code's chat UI with LM Studio backend, including MCP setup and model features (visual thinking). Update `.gitignore` to exclude optional local docs (`GUIDE-VSCODE-CLAUDE-CHAT.md`, `CLAUDE.md`, `discussion-log.md`).
 - **0.6.2** (2026-03-01) – **`--purge`**: add option “Purge last session only” (last ~2 min). Fix showTurnDuration/keepSessionOnExit: prefs read now outputs lowercase `true`/`false` so `settings.json` gets the correct value (fixes “Cooked for X” not showing when user chose yes). README: troubleshooting for Cursor/VS Code opening extra windows when starting Claude Code.
 - **0.6.1** (2026-03-01) – Before loading the selected model, unload any currently loaded model(s) in LM Studio via `/api/v1/models/unload` to avoid load conflicts and HTTP 500 when switching model or context.
