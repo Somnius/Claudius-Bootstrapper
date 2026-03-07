@@ -111,6 +111,19 @@ Runs server check, model selection, and context-length choice, then exits withou
 LMSTUDIO_URL=http://127.0.0.1:1234 claudius
 ```
 
+### Using Claude Code in VS Code (chat panel)
+
+Claudius runs the **CLI** in the terminal. To use the **Claude Code extension** in VS Code (chat panel, Spark icon) with the **same** LM Studio backend: install the [Claude Code extension](https://marketplace.visualstudio.com/items?itemName=Anthropic.claude-code), then in VS Code **user settings** (JSON) set:
+
+```json
+"claudeCode.environmentVariables": [
+  { "name": "ANTHROPIC_BASE_URL", "value": "http://localhost:1234" },
+  { "name": "ANTHROPIC_AUTH_TOKEN", "value": "lmstudio" }
+]
+```
+
+Ensure LM Studio’s server is running and a model is loaded (e.g. run `claudius` once to load and write `~/.claude/settings.json`). Set the extension’s default model to your LM Studio model ID. The status bar may show “Signed out”; you don’t need to sign in—use the chat and it should use your local model. For MCP and a full step-by-step, see the extension docs or a local guide such as `GUIDE-VSCODE-CLAUDE-CHAT.md` if present in your copy of the repo (that file is gitignored).
+
 ## Alias
 
 In `~/.bashrc` (adjust path if you cloned elsewhere):
@@ -166,7 +179,9 @@ Override LM Studio URL: `LMSTUDIO_URL=http://127.0.0.1:1234 claudius`.
 | [settings.json.example](settings.json.example) | Example `~/.claude/settings.json` — copy to `~/.claude/settings.json` and set `defaultModel` |
 | `README.md`             | This file                                                  |
 | `LICENSE`               | MIT license                                                |
-| `.gitignore`            | Ignore notes, local/sensitive                              |
+| `.gitignore`            | Ignore notes, local/sensitive; also `CLAUDE.md`, `GUIDE-VSCODE-CLAUDE-CHAT.md`, `discussion-log.md` |
+
+Optional local docs (gitignored, not in the repo by default): `GUIDE-VSCODE-CLAUDE-CHAT.md` (step-by-step: Claude Code in VS Code chat panel + LM Studio + MCP), `CLAUDE.md` (project-specific Claude instructions), `discussion-log.md` (session notes and decisions).
 
 ## Troubleshooting
 
