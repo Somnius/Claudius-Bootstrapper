@@ -1,4 +1,4 @@
-# Claudius
+# Claudius-Bootstrapper
 
 [![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?style=flat&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
