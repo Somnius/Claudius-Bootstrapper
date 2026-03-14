@@ -1,60 +1,144 @@
 #!/usr/bin/env bash
-# Claudius v0.7.1 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor).
+# Claudius v0.8.0 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, custom API).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
-# Check server, pick model, set context length, update config, run claude.
-# Requires: LM Studio (local server on port 1234); jq or Python for JSON; Claude Code CLI.
+# Check server, pick model, set context (where applicable), update config, run claude.
+# Supports: bash, zsh, fish, ksh, sh. Platforms: Linux, macOS, Windows (Git Bash/WSL).
 
 set -euo pipefail
 
-VERSION="0.7.1"
+VERSION="0.8.0"
 
 # --help function: Display usage information
 print_help() {
   cat << 'EOF'
 Usage: claudius [OPTIONS]
 
-Claudius v0.7.1 - Claude Code + LM Studio bootstrapper (named for the fourth Roman emperor)
+Claudius v0.8.0 - Claude Code multi-backend bootstrapper
 
-Connects Claude Code (Anthropic's agentic CLI) to local models served by LM Studio.
-No cloud, no proxy.
+Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, OpenRouter, or a custom
+OpenAI-compatible API (e.g. Alibaba Cloud). Writes env vars to your shell config (bash/zsh/fish/ksh/sh).
 
 Options:
   --help, -h    Show this help message and exit
-  --init        Reset preferences (show reply duration, keep session history)
+  --init        Reset preferences and backend (show reply duration, keep session, which backend)
   --purge       Interactive menu to purge saved Claude Code session data
-  --dry-run     Test flow (server check, model/context selection) without writing config or starting Claude
+  --dry-run     Test flow without writing config or starting Claude
   --test        Alias for --dry-run
 
 Environment Variables:
-  LMSTUDIO_URL  Override default LM Studio URL (default: http://localhost:1234)
+  CLAUDIUS_BACKEND   Backend: lmstudio | ollama | openrouter | custom
+  LMSTUDIO_URL       LM Studio base URL (default: http://localhost:1234)
+  OLLAMA_URL         Ollama base URL (default: http://localhost:11434)
+  CLAUDIUS_BASE_URL  Custom/OpenRouter base URL (for custom or openrouter)
+  CLAUDIUS_API_KEY   API key for OpenRouter or custom backend
+  CLAUDIUS_SHELL     Override shell for config file (bash|zsh|fish|ksh|sh)
 
 Examples:
-  claudius                          # Run full flow: select model, load, start Claude
-  claudius --init                   # Reset preferences after installing missing dependencies
-  claudius --purge                  # Clear session data interactively  
-  claudius --dry-run                # Test without writing config
-  
-Notes:
-  - Requires LM Studio with at least one model loaded
-  - First run creates ~/.claude/settings.json and updates your shell exports
-  - Run "claudius --purge" to clear session history under ~/.claude/
+  claudius                          # Run full flow: choose backend, model, start Claude
+  claudius --init                   # Reset preferences and re-choose backend
+  claudius --purge                  # Clear session data interactively
+  CLAUDIUS_BACKEND=ollama claudius  # Use Ollama (if already configured)
 
 For more info: https://github.com/Somnius/Claudius-Bootstrapper
 EOF
 }
 
-LMSTUDIO_URL="${LMSTUDIO_URL:-http://localhost:1234}"
-LMSTUDIO_API="${LMSTUDIO_URL}/api/v1"
+# Paths and defaults
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
 CLAUDIUS_PREFS="${HOME}/.claude/claudius-prefs.json"
 CLAUDE_HOME="${HOME}/.claude"
-BASHRC="${HOME}/.bashrc"
+LMSTUDIO_URL="${LMSTUDIO_URL:-http://localhost:1234}"
+OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
+OPENROUTER_URL="${OPENROUTER_URL:-https://openrouter.ai/api/v1}"
+LMSTUDIO_API="${LMSTUDIO_URL}/api/v1"
 
 # Session-related paths under ~/.claude to purge (do not include settings.json or claudius-prefs.json)
 SESSION_DIRS="projects debug file-history tasks todos plans shell-snapshots session-env paste-cache"
 
 # Curl timeout: connect + max total (avoid hanging)
 CURL_TIMEOUT="${CURL_TIMEOUT:-10}"
+
+# --- Platform detection: linux, darwin, or windows ---
+detect_platform() {
+  local u
+  u=$(uname -s 2>/dev/null) || true
+  case "$u" in
+    Linux)   echo "linux" ;;
+    Darwin)  echo "darwin" ;;
+    MINGW*|MSYS*|CYGWIN*) echo "windows" ;;
+    *)       echo "unknown" ;;
+  esac
+}
+
+# --- Shell detection for config file and export syntax ---
+# Output: bash, zsh, fish, ksh, or sh. Prefer CLAUDIUS_SHELL, then SHELL, then infer.
+get_current_shell() {
+  if [[ -n "${CLAUDIUS_SHELL:-}" ]]; then
+    case "${CLAUDIUS_SHELL}" in
+      bash|zsh|fish|ksh|sh) echo "${CLAUDIUS_SHELL}"; return ;;
+    esac
+  fi
+  if [[ -n "${SHELL:-}" ]]; then
+    case "$SHELL" in
+      *fish*) echo "fish"; return ;;
+      *zsh*)  echo "zsh"; return ;;
+      *ksh*)  echo "ksh"; return ;;
+      *bash*) echo "bash"; return ;;
+    esac
+  fi
+  [[ -n "${BASH:-}" ]] && echo "bash" && return
+  [[ -n "${ZSH_VERSION:-}" ]] && echo "zsh" && return
+  [[ -n "${FISH_VERSION:-}" ]] && echo "fish" && return
+  echo "bash"
+}
+
+# --- Config file path for the given shell ---
+get_shell_config_file() {
+  local shell="${1:-bash}"
+  case "$shell" in
+    fish) echo "${HOME}/.config/fish/config.fish" ;;
+    zsh)  echo "${HOME}/.zshrc" ;;
+    ksh)  echo "${HOME}/.kshrc" ;;
+    sh)   echo "${HOME}/.profile" ;;
+    *)    echo "${HOME}/.bashrc" ;;
+  esac
+}
+
+# --- Append Claude Code env block to the correct config file with correct syntax ---
+# Args: shell, base_url, auth_token, api_key (auth_token for LM Studio placeholder; api_key for Bearer backends)
+update_shell_exports() {
+  local shell="${1:-bash}" base_url="$2" auth_token="${3:-}" api_key="${4:-}"
+  local config_file marker block
+  config_file=$(get_shell_config_file "$shell")
+  marker="# Claude Code → Claudius (ANTHROPIC_BASE_URL for backend)"
+
+  if [[ -f "$config_file" ]] && grep -q "ANTHROPIC_BASE_URL" "$config_file" 2>/dev/null && grep -q "$marker" "$config_file" 2>/dev/null; then
+    echo "  Shell config already contains Claude Code env block: $config_file"
+    return 0
+  fi
+
+  local token_to_use="$auth_token"
+  [[ -n "$api_key" ]] && token_to_use="$api_key"
+
+  if [[ "$shell" == "fish" ]]; then
+    mkdir -p "${HOME}/.config/fish"
+    block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
+set -gx ANTHROPIC_AUTH_TOKEN \"${token_to_use}\"
+set -gx ANTHROPIC_API_KEY \"${api_key}\"
+set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0"
+  else
+    block="export ANTHROPIC_BASE_URL=\"${base_url}\"
+export ANTHROPIC_AUTH_TOKEN=\"${token_to_use}\"
+export ANTHROPIC_API_KEY=\"${api_key}\"
+export CLAUDE_CODE_ATTRIBUTION_HEADER=0"
+  fi
+
+  echo "" >> "$config_file"
+  echo "$marker" >> "$config_file"
+  echo "$block" >> "$config_file"
+  echo "  Appended Claude Code env block to: $config_file"
+  echo "  Reload with: source $config_file  (or open a new terminal)."
+}
 
 # --- First-time checks: LM Studio and required commands (run when prefs missing) ---
 # Returns 0 if LM Studio appears installed (lms in PATH or common path), 1 otherwise.
@@ -66,6 +150,18 @@ check_lm_studio_installed() {
   [[ -x "/opt/LM Studio/bin/lms" ]] 2>/dev/null && return 0
   echo "LM Studio does not appear to be installed (no 'lms' command found)."
   echo "  Download and install from: https://lmstudio.ai/"
+  echo "  Then run this script again with: claudius --init"
+  echo ""
+  return 1
+}
+
+# Returns 0 if Ollama appears installed (ollama in PATH), 1 otherwise.
+check_ollama_installed() {
+  if command -v ollama &>/dev/null; then
+    return 0
+  fi
+  echo "Ollama does not appear to be installed (no 'ollama' command found)."
+  echo "  Install from: https://ollama.com"
   echo "  Then run this script again with: claudius --init"
   echo ""
   return 1
@@ -88,13 +184,83 @@ check_required_commands() {
   echo ""
   echo "Install on your system, then run this script again with: claudius --init"
   echo ""
-  echo "Typical install (adjust for your distro):"
-  echo "  curl:    apt install curl   (Debian/Ubuntu/PikaOS)  |  dnf install curl   (Fedora)  |  pacman -S curl   (Arch)"
-  echo "  jq:      apt install jq     (Debian/Ubuntu/PikaOS)  |  dnf install jq     (Fedora)  |  pacman -S jq     (Arch)"
-  echo "  python3: usually preinstalled; if not: apt/dnf/pacman install python3"
+  local plat
+  plat=$(detect_platform)
+  case "$plat" in
+    linux)
+      if [[ -r /etc/os-release ]]; then
+        local id_like id
+        id=$(. /etc/os-release && echo "${ID:-}")
+        id_like=$(. /etc/os-release && echo "${ID_LIKE:-}")
+        if [[ "$id" == "debian" || "$id" == "ubuntu" || "$id" == "pika" || "$id_like" == *"debian"* ]]; then
+          echo "  Debian/Ubuntu/PikaOS: sudo apt install curl jq"
+        elif [[ "$id" == "fedora" || "$id" == "rhel" || "$id_like" == *"fedora"* ]]; then
+          echo "  Fedora/RHEL: sudo dnf install curl jq"
+        elif [[ "$id" == "arch" || "$id_like" == *"arch"* ]]; then
+          echo "  Arch: sudo pacman -S curl jq"
+        else
+          echo "  curl/jq: use your package manager (apt/dnf/pacman/zypper etc.)"
+        fi
+      else
+        echo "  curl/jq: use your package manager"
+      fi
+      ;;
+    darwin)
+      echo "  macOS: brew install curl jq"
+      ;;
+    windows)
+      echo "  Windows: use WSL or Git Bash and install curl/jq there, or install from https://curl.se / https://jqlang.github.io/jq/"
+      ;;
+    *)
+      echo "  curl/jq: use your system package manager"
+      ;;
+  esac
+  echo "  python3: usually preinstalled; if not, install via your package manager"
   echo "  claude:  see https://code.claude.com/docs for install instructions (Quickstart / your platform)"
   echo ""
   return 1
+}
+
+# --- Backend: read/save from prefs (backend, baseUrl, apiKey) ---
+get_pref() {
+  local key="$1"
+  if [[ ! -f "$CLAUDIUS_PREFS" ]]; then
+    echo ""
+    return
+  fi
+  if command -v jq &>/dev/null; then
+    jq -r --arg k "$key" '.[$k] // ""' "$CLAUDIUS_PREFS" 2>/dev/null || echo ""
+  else
+    python3 -c "import json; f=open('$CLAUDIUS_PREFS'); d=json.load(f); print(d.get('$key', '') or '')" 2>/dev/null || echo ""
+  fi
+}
+
+# Merge new keys into existing prefs JSON (preserves showTurnDuration, keepSessionOnExit, etc.)
+merge_prefs() {
+  local backend="$1" base_url="$2" api_key="${3:-}"
+  mkdir -p "$(dirname "$CLAUDIUS_PREFS")"
+  if [[ ! -f "$CLAUDIUS_PREFS" ]]; then
+    if command -v jq &>/dev/null; then
+      jq -n --arg b "$backend" --arg u "$base_url" --arg k "$api_key" \
+        '{backend: $b, baseUrl: $u, apiKey: $k, showTurnDuration: true, keepSessionOnExit: true}' > "$CLAUDIUS_PREFS"
+    else
+      printf '%s\n' "{\"backend\": \"$backend\", \"baseUrl\": \"$base_url\", \"apiKey\": \"$api_key\", \"showTurnDuration\": true, \"keepSessionOnExit\": true}" > "$CLAUDIUS_PREFS"
+    fi
+    return
+  fi
+  if command -v jq &>/dev/null; then
+    jq --arg b "$backend" --arg u "$base_url" --arg k "$api_key" \
+      '.backend = $b | .baseUrl = $u | .apiKey = $k' "$CLAUDIUS_PREFS" > "${CLAUDIUS_PREFS}.tmp" && mv "${CLAUDIUS_PREFS}.tmp" "$CLAUDIUS_PREFS"
+  else
+    python3 -c "
+import json
+with open('$CLAUDIUS_PREFS') as f: d = json.load(f)
+d['backend'] = '$backend'
+d['baseUrl'] = '$base_url'
+d['apiKey'] = '$api_key'
+with open('$CLAUDIUS_PREFS','w') as f: json.dump(d, f, indent=2)
+" 2>/dev/null || true
+  fi
 }
 
 # --- First-time / --init: ask preferences and save to CLAUDIUS_PREFS ---
@@ -114,13 +280,41 @@ run_init() {
   local keep_sess_bool=true
   [[ "${keep_sess,,}" == "n" || "${keep_sess,,}" == "no" ]] && keep_sess_bool=false
 
+  echo "Which backend should Claudius use?"
+  echo "  1) LM Studio (local, default http://localhost:1234)"
+  echo "  2) Ollama (local, default http://localhost:11434)"
+  echo "  3) OpenRouter (cloud, requires API key)"
+  echo "  4) Custom (e.g. Alibaba Cloud — enter base URL and API key)"
+  echo ""
+  local backend_choice backend="lmstudio" base_url="$LMSTUDIO_URL" api_key=""
+  read -rp "Choose (1-4) [1]: " backend_choice
+  backend_choice="${backend_choice:-1}"
+  case "$backend_choice" in
+    1) backend="lmstudio"; base_url="${LMSTUDIO_URL}"; api_key="" ;;
+    2) backend="ollama";   base_url="${OLLAMA_URL}"; api_key="" ;;
+    3)
+      backend="openrouter"
+      base_url="${OPENROUTER_URL}"
+      read -rp "OpenRouter API key: " api_key
+      [[ -z "$api_key" ]] && echo "  Warning: API key empty; list models may fail." >&2
+      ;;
+    4)
+      backend="custom"
+      read -rp "Custom API base URL (e.g. https://dashscope-intl.aliyuncs.com/compatible-mode/v1): " base_url
+      read -rp "API key: " api_key
+      [[ -z "$base_url" || -z "$api_key" ]] && echo "  Warning: URL or key empty; list models may fail." >&2
+      ;;
+    *) backend="lmstudio"; base_url="${LMSTUDIO_URL}"; api_key="" ;;
+  esac
+
   mkdir -p "$(dirname "$CLAUDIUS_PREFS")"
   if command -v jq &>/dev/null; then
     jq -n \
       --arg st "$show_turn_bool" --arg ks "$keep_sess_bool" \
-      '{showTurnDuration: ($st == "true"), keepSessionOnExit: ($ks == "true")}' > "$CLAUDIUS_PREFS"
+      --arg b "$backend" --arg u "$base_url" --arg k "$api_key" \
+      '{showTurnDuration: ($st == "true"), keepSessionOnExit: ($ks == "true"), backend: $b, baseUrl: $u, apiKey: $k}' > "$CLAUDIUS_PREFS"
   else
-    printf '%s\n' "{\"showTurnDuration\": $show_turn_bool, \"keepSessionOnExit\": $keep_sess_bool}" > "$CLAUDIUS_PREFS"
+    printf '%s\n' "{\"showTurnDuration\": $show_turn_bool, \"keepSessionOnExit\": $keep_sess_bool, \"backend\": \"$backend\", \"baseUrl\": \"$base_url\", \"apiKey\": \"$api_key\"}" > "$CLAUDIUS_PREFS"
   fi
   echo "  Saved. Run claudius --init again anytime to change these."
   echo ""
@@ -300,77 +494,170 @@ run_after_session_menu() {
   return 0
 }
 
+# --- Resolve backend from env or prefs; set CURRENT_BACKEND, CURRENT_BASE_URL, CURRENT_API_KEY, CURRENT_AUTH ---
+resolve_backend() {
+  if [[ -n "${CLAUDIUS_BACKEND:-}" ]]; then
+    CURRENT_BACKEND="$CLAUDIUS_BACKEND"
+    CURRENT_BASE_URL="${CLAUDIUS_BASE_URL:-}"
+    CURRENT_API_KEY="${CLAUDIUS_API_KEY:-}"
+  else
+    CURRENT_BACKEND=$(get_pref "backend")
+    CURRENT_BASE_URL=$(get_pref "baseUrl")
+    CURRENT_API_KEY=$(get_pref "apiKey")
+  fi
+  # Defaults when empty
+  [[ -z "$CURRENT_BACKEND" ]] && CURRENT_BACKEND="lmstudio"
+  if [[ -z "$CURRENT_BASE_URL" ]]; then
+    case "$CURRENT_BACKEND" in
+      lmstudio) CURRENT_BASE_URL="${LMSTUDIO_URL}" ;;
+      ollama)   CURRENT_BASE_URL="${OLLAMA_URL}" ;;
+      openrouter) CURRENT_BASE_URL="${OPENROUTER_URL}" ;;
+      *)        CURRENT_BASE_URL="" ;;
+    esac
+  fi
+  [[ -z "$CURRENT_API_KEY" ]] && CURRENT_API_KEY=""
+  # Auth token for Claude Code settings: LM Studio uses placeholder, others use API key
+  case "$CURRENT_BACKEND" in
+    lmstudio) CURRENT_AUTH="lmstudio" ;;
+    ollama)   CURRENT_AUTH="" ;;
+    *)       CURRENT_AUTH="$CURRENT_API_KEY" ;;
+  esac
+}
+
 # --- Check if LM Studio server is reachable ---
-check_server() {
+check_server_lmstudio() {
+  local base_url="${1:-$LMSTUDIO_URL}"
+  local api_base="${base_url}/api/v1"
   local code
-  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${LMSTUDIO_API}/models" 2>/dev/null) || true
+  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${api_base}/models" 2>/dev/null) || true
   [[ "$code" == "200" ]]
 }
 
-# --- Prompt when server is not running: Resume / Try start / Abort ---
-# Also shows currently loaded model(s) if any
-wait_for_server() {
-  local current_loaded=""
-  local loaded_json=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${LMSTUDIO_API}/models" 2>/dev/null) || true
-  if [[ -n "${loaded_json}" ]]; then
-    # Get first loaded instance ID
-    current_loaded=$(echo "$loaded_json" | jq -r '.models[]?.loaded_instances[]?.id // empty' 2>/dev/null | head -1)
-    if [[ -n "${current_loaded}" ]]; then
-      echo "  Currently loaded: ${current_loaded} (will be unloaded before switching)" >&2
-    fi
-  fi
-  
-  echo "LM Studio server is not running at ${LMSTUDIO_URL}."
-  echo ""
-  echo "  1) Resume  - I've started the server; check again."
-  echo "  2) Start   - Try to start the server (runs: lms server start)."
-  echo "  3) Abort   - Exit."
-  echo ""
+check_server() {
+  check_server_lmstudio "${1:-$LMSTUDIO_URL}"
+}
 
-  local choice
-  while true; do
-    read -rp "Choose (1-3): " choice
-    case "$choice" in
-      1)
-        if check_server; then
-          echo "Server is up. Continuing."
-          return 0
-        fi
-        echo "Still not reachable. Start the server in LM Studio (Local Inference Server), then choose Resume again."
-        echo ""
-        ;;
-      2)
-        if command -v lms &>/dev/null; then
-          echo "Starting LM Studio server in background (lms server start)..."
-          lms server start &
-          sleep 3
-          if check_server; then
+# --- Prompt when server is not running: Resume / Try start / Abort ---
+# Backend-aware: LM Studio (lms server start), Ollama (ollama serve), OpenRouter/Custom (just Abort or retry).
+wait_for_server() {
+  if [[ "$CURRENT_BACKEND" == "lmstudio" ]]; then
+    local api_base="${CURRENT_BASE_URL}/api/v1"
+    local current_loaded=""
+    local loaded_json
+    loaded_json=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${api_base}/models" 2>/dev/null) || true
+    if [[ -n "${loaded_json}" ]]; then
+      current_loaded=$(echo "$loaded_json" | jq -r '.models[]?.loaded_instances[]?.id // empty' 2>/dev/null | head -1)
+      if [[ -n "${current_loaded}" ]]; then
+        echo "  Currently loaded: ${current_loaded} (will be unloaded before switching)" >&2
+      fi
+    fi
+    echo "LM Studio server is not running at ${CURRENT_BASE_URL}."
+    echo ""
+    echo "  1) Resume  - I've started the server; check again."
+    echo "  2) Start   - Try to start the server (runs: lms server start)."
+    echo "  3) Abort   - Exit."
+    echo ""
+    local choice
+    while true; do
+      read -rp "Choose (1-3): " choice
+      case "$choice" in
+        1)
+          if check_server_for_backend; then
             echo "Server is up. Continuing."
             return 0
           fi
-          echo "Server may still be starting. Choose Resume to retry or Abort."
-        else
-          echo "Command 'lms' not found. Install LM Studio and ensure 'lms' is on your PATH (e.g. ~/.lmstudio/bin)."
-          echo "Start the server from the LM Studio GUI, then choose Resume."
-        fi
-        echo ""
-        ;;
-      3)
-        echo "Aborted."
-        exit 1
-        ;;
-      *)
-        echo "Invalid choice. Enter 1, 2, or 3."
-        echo ""
-        ;;
-    esac
-  done
+          echo "Still not reachable. Start the server in LM Studio, then choose Resume again."
+          echo ""
+          ;;
+        2)
+          if command -v lms &>/dev/null; then
+            echo "Starting LM Studio server in background (lms server start)..."
+            lms server start &
+            sleep 3
+            if check_server_for_backend; then
+              echo "Server is up. Continuing."
+              return 0
+            fi
+            echo "Server may still be starting. Choose Resume to retry or Abort."
+          else
+            echo "Command 'lms' not found. Install LM Studio and ensure 'lms' is on your PATH."
+            echo "Start the server from the LM Studio GUI, then choose Resume."
+          fi
+          echo ""
+          ;;
+        3) echo "Aborted."; exit 1 ;;
+        *) echo "Invalid choice. Enter 1, 2, or 3."; echo "" ;;
+      esac
+    done
+  elif [[ "$CURRENT_BACKEND" == "ollama" ]]; then
+    echo "Ollama server is not running at ${CURRENT_BASE_URL}."
+    echo ""
+    echo "  1) Resume  - I've started the server (e.g. ollama serve); check again."
+    echo "  2) Start   - Try to start Ollama (runs: ollama serve in background)."
+    echo "  3) Abort   - Exit."
+    echo ""
+    local choice
+    while true; do
+      read -rp "Choose (1-3): " choice
+      case "$choice" in
+        1)
+          if check_server_for_backend; then
+            echo "Server is up. Continuing."
+            return 0
+          fi
+          echo "Still not reachable. Run 'ollama serve' in another terminal, then choose Resume."
+          echo ""
+          ;;
+        2)
+          if command -v ollama &>/dev/null; then
+            echo "Starting Ollama in background (ollama serve)..."
+            ollama serve &
+            sleep 3
+            if check_server_for_backend; then
+              echo "Server is up. Continuing."
+              return 0
+            fi
+            echo "Server may still be starting. Choose Resume to retry or Abort."
+          else
+            echo "Command 'ollama' not found. Install from https://ollama.com and run 'ollama serve'."
+          fi
+          echo ""
+          ;;
+        3) echo "Aborted."; exit 1 ;;
+        *) echo "Invalid choice. Enter 1, 2, or 3."; echo "" ;;
+      esac
+    done
+  else
+    # OpenRouter / custom: no local server to start
+    echo "Cannot reach ${CURRENT_BACKEND} at ${CURRENT_BASE_URL}."
+    echo ""
+    echo "  1) Retry   - Check network and API key, then try again."
+    echo "  2) Abort   - Exit."
+    echo ""
+    local choice
+    while true; do
+      read -rp "Choose (1-2): " choice
+      case "$choice" in
+        1)
+          if check_server_for_backend; then
+            echo "Connected. Continuing."
+            return 0
+          fi
+          echo "Still not reachable. Check your API key and network."
+          echo ""
+          ;;
+        2) echo "Aborted."; exit 1 ;;
+        *) echo "Invalid choice. Enter 1 or 2."; echo "" ;;
+      esac
+    done
+  fi
 }
 
 # --- Unload any currently loaded model(s) in LM Studio (avoids load conflicts / HTTP 500) ---
 unload_loaded_models() {
+  local api_base="${1:-$LMSTUDIO_API}"
   local resp ids id
-  resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${LMSTUDIO_API}/models" 2>/dev/null) || true
+  resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${api_base}/models" 2>/dev/null) || true
   [[ -z "$resp" ]] && return 0
   ids=()
   if command -v jq &>/dev/null; then
@@ -399,17 +686,19 @@ except Exception: pass
     curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time 30 \
       -X POST -H "Content-Type: application/json" \
       -d "{\"instance_id\": \"${id}\"}" \
-      "${LMSTUDIO_API}/models/unload" 2>/dev/null || true
+      "${api_base}/models/unload" 2>/dev/null || true
   done
 }
 
 # --- Fetch model list from LM Studio (native API: key and max_context_length) ---
 # Output: one line per LLM: "key|max_context_length"
-fetch_models() {
+fetch_models_lmstudio() {
+  local base_url="${1:-$LMSTUDIO_URL}"
+  local api_base="${base_url}/api/v1"
   local resp
-  resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${LMSTUDIO_API}/models" 2>/dev/null) || true
+  resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${api_base}/models" 2>/dev/null) || true
   if [[ -z "${resp}" ]]; then
-    echo "Error: Could not reach LM Studio at ${LMSTUDIO_URL}. Is the local server running?" >&2
+    echo "Error: Could not reach LM Studio at ${base_url}. Is the local server running?" >&2
     return 1
   fi
   if command -v jq &>/dev/null; then
@@ -433,7 +722,160 @@ except Exception:
   return 1
 }
 
+# --- Ollama: check server (GET /api/tags), list models ---
+check_server_ollama() {
+  local base_url="${1:-$OLLAMA_URL}"
+  local code
+  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${base_url}/api/tags" 2>/dev/null) || true
+  [[ "$code" == "200" ]]
+}
+
+fetch_models_ollama() {
+  local base_url="${1:-$OLLAMA_URL}"
+  local resp
+  resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${base_url}/api/tags" 2>/dev/null) || true
+  if [[ -z "${resp}" ]]; then
+    echo "Error: Could not reach Ollama at ${base_url}. Is 'ollama serve' running?" >&2
+    return 1
+  fi
+  if command -v jq &>/dev/null; then
+    if echo "$resp" | jq -e '.models[]?' &>/dev/null; then
+      echo "$resp" | jq -r '.models[] | "\(.name)|32768"'
+      return 0
+    fi
+  else
+    echo "$resp" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    for m in d.get('models', []):
+        name = m.get('name', '')
+        if name:
+            print(name + '|32768')
+except Exception:
+    sys.exit(1)
+" 2>/dev/null && return 0
+  fi
+  echo "Error: Could not parse model list from Ollama. Response: ${resp:0:200}" >&2
+  return 1
+}
+
+# --- OpenRouter: check (GET /api/v1/models with Bearer), list models ---
+check_server_openrouter() {
+  local base_url="${1:-$OPENROUTER_URL}" api_key="$2"
+  local code
+  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+    -H "Authorization: Bearer ${api_key}" "${base_url}/models" 2>/dev/null) || true
+  [[ "$code" == "200" ]]
+}
+
+fetch_models_openrouter() {
+  local base_url="${1:-$OPENROUTER_URL}" api_key="$2"
+  local resp
+  resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+    -H "Authorization: Bearer ${api_key}" "${base_url}/models" 2>/dev/null) || true
+  if [[ -z "${resp}" ]]; then
+    echo "Error: Could not reach OpenRouter. Check API key and network." >&2
+    return 1
+  fi
+  if command -v jq &>/dev/null; then
+    if echo "$resp" | jq -e '.data[]?' &>/dev/null; then
+      echo "$resp" | jq -r '.data[] | "\(.id)|\(.context_length // 32768)"'
+      return 0
+    fi
+  else
+    echo "$resp" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    for m in d.get('data', []):
+        mid = m.get('id', '')
+        ctx = m.get('context_length', 32768)
+        if mid:
+            print(str(mid) + '|' + str(ctx))
+except Exception:
+    sys.exit(1)
+" 2>/dev/null && return 0
+  fi
+  echo "Error: Could not parse OpenRouter models. Response: ${resp:0:200}" >&2
+  return 1
+}
+
+# --- Custom (OpenAI-compatible): GET base/models or base/v1/models with Bearer ---
+check_server_custom() {
+  local base_url="$1" api_key="$2"
+  local url="$base_url"
+  [[ "$url" != */ ]] && url="${url}/"
+  local code
+  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+    -H "Authorization: Bearer ${api_key}" "${url}models" 2>/dev/null) || true
+  if [[ "$code" == "200" ]]; then return 0; fi
+  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+    -H "Authorization: Bearer ${api_key}" "${url}v1/models" 2>/dev/null) || true
+  [[ "$code" == "200" ]]
+}
+
+fetch_models_custom() {
+  local base_url="$1" api_key="$2"
+  local url="$base_url"
+  [[ "$url" != */ ]] && url="${url}/"
+  local resp
+  resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+    -H "Authorization: Bearer ${api_key}" "${url}models" 2>/dev/null) || true
+  if [[ -z "$resp" ]] || ! echo "$resp" | jq -e '.data' &>/dev/null 2>/dev/null; then
+    resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+      -H "Authorization: Bearer ${api_key}" "${url}v1/models" 2>/dev/null) || true
+  fi
+  if [[ -z "${resp}" ]]; then
+    echo "Error: Could not reach custom API at ${base_url}. Check URL and API key." >&2
+    return 1
+  fi
+  if command -v jq &>/dev/null; then
+    if echo "$resp" | jq -e '.data[]?' &>/dev/null; then
+      echo "$resp" | jq -r '.data[] | "\(.id)|\(.context_length // 32768)"'
+      return 0
+    fi
+  else
+    echo "$resp" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    for m in d.get('data', []):
+        mid = m.get('id', '')
+        ctx = m.get('context_length', 32768)
+        if mid:
+            print(str(mid) + '|' + str(ctx))
+except Exception:
+    sys.exit(1)
+" 2>/dev/null && return 0
+  fi
+  echo "Error: Could not parse custom API model list. Response: ${resp:0:200}" >&2
+  return 1
+}
+
+# --- Unified: check server and fetch models by backend ---
+check_server_for_backend() {
+  case "$CURRENT_BACKEND" in
+    lmstudio)  check_server_lmstudio "$CURRENT_BASE_URL" ;;
+    ollama)    check_server_ollama "$CURRENT_BASE_URL" ;;
+    openrouter) check_server_openrouter "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
+    custom)    check_server_custom "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
+    *)         check_server_lmstudio "$CURRENT_BASE_URL" ;;
+  esac
+}
+
+fetch_models_for_backend() {
+  case "$CURRENT_BACKEND" in
+    lmstudio)  fetch_models_lmstudio "$CURRENT_BASE_URL" ;;
+    ollama)    fetch_models_ollama "$CURRENT_BASE_URL" ;;
+    openrouter) fetch_models_openrouter "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
+    custom)    fetch_models_custom "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
+    *)         fetch_models_lmstudio "$CURRENT_BASE_URL" ;;
+  esac
+}
+
 # --- Interactive model selection (numbered menu); outputs "key|max_context_length" ---
+# Uses fetch_models_for_backend (CURRENT_BACKEND, CURRENT_BASE_URL, CURRENT_API_KEY must be set).
 select_model() {
   local keys=() max_ctx=()
   local line key ctx
@@ -442,14 +884,15 @@ select_model() {
     key="${line%%|*}"
     ctx="${line##*|}"
     [[ -n "$key" ]] && keys+=("$key") && max_ctx+=("$ctx")
-  done < <(fetch_models)
+  done < <(fetch_models_for_backend)
 
   if [[ ${#keys[@]} -eq 0 ]]; then
-    echo "No models found. Start LM Studio and load a model, then try again." >&2
+    echo "No models found. Check that the backend is running and configured, then try again." >&2
     return 1
   fi
 
-  echo "Models available in LM Studio:" >&2
+  local backend_label="$CURRENT_BACKEND"
+  echo "Models available ($backend_label):" >&2
   echo "" >&2
   local i
   for i in "${!keys[@]}"; do
@@ -683,16 +1126,17 @@ wait_with_spinner() {
 
 # --- Load model with given context length via LM Studio API; show spinner until load finishes ---
 # Unloads any currently loaded model(s) first to avoid load conflicts (e.g. HTTP 500).
+# Args: model_key, context_length, api_base (e.g. http://localhost:1234/api/v1)
 load_model_with_context() {
-  local model_key="$1" context_length="$2"
+  local model_key="$1" context_length="$2" api_base="${3:-$LMSTUDIO_API}"
   local tmp resp body code
-  unload_loaded_models
+  unload_loaded_models "$api_base"
   tmp=$(mktemp)
   (
     curl -s -w "\n%{http_code}" --connect-timeout 2 --max-time 300 \
       -X POST -H "Content-Type: application/json" \
       -d "{\"model\": \"${model_key}\", \"context_length\": ${context_length}}" \
-      "${LMSTUDIO_API}/models/load" 2>/dev/null || printf '\n000\n'
+      "${api_base}/models/load" 2>/dev/null || printf '\n000\n'
   ) > "$tmp" &
   wait_with_spinner $! "Loading model (context ${context_length})…"
   resp=$(cat "$tmp")
@@ -715,21 +1159,24 @@ load_model_with_context() {
 }
 
 # --- Update ~/.claude/settings.json ---
+# Args: model_id, base_url, auth_token (e.g. lmstudio or API key), api_key (for env, can be same as auth)
 write_settings() {
-  local model_id="$1"
+  local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}"
+  [[ -z "$api_key" ]] && api_key="$auth_token"
   local show_turn
   show_turn=$(get_show_turn_duration)
   local schema="https://json.schemastore.org/claude-code-settings.json"
-  local base_url="http://localhost:1234"
   local tmp
   tmp=$(mktemp)
   if command -v jq &>/dev/null; then
     jq -n \
       --arg schema "$schema" \
       --arg base "$base_url" \
+      --arg auth "$auth_token" \
+      --arg apik "$api_key" \
       --arg model "$model_id" \
       --arg show_turn "$show_turn" \
-      '{"$schema": $schema, "env": {"ANTHROPIC_BASE_URL": $base, "ANTHROPIC_AUTH_TOKEN": "lmstudio", "ANTHROPIC_API_KEY": ""}, "defaultModel": $model, "showTurnDuration": ($show_turn == "true")}' \
+      '{"$schema": $schema, "env": {"ANTHROPIC_BASE_URL": $base, "ANTHROPIC_AUTH_TOKEN": $auth, "ANTHROPIC_API_KEY": $apik}, "defaultModel": $model, "showTurnDuration": ($show_turn == "true")}' \
       > "$tmp"
   else
     python3 -c "
@@ -738,8 +1185,8 @@ print(json.dumps({
     \"\$schema\": \"$schema\",
     \"env\": {
         \"ANTHROPIC_BASE_URL\": \"$base_url\",
-        \"ANTHROPIC_AUTH_TOKEN\": \"lmstudio\",
-        \"ANTHROPIC_API_KEY\": \"\"
+        \"ANTHROPIC_AUTH_TOKEN\": \"$auth_token\",
+        \"ANTHROPIC_API_KEY\": \"$api_key\"
     },
     \"defaultModel\": \"$model_id\",
     \"showTurnDuration\": ($show_turn == "true")
@@ -751,33 +1198,16 @@ print(json.dumps({
   echo "  Updated: $CLAUDE_SETTINGS (defaultModel = $model_id)"
 }
 
-# --- Ensure .bashrc exports are set ---
-update_bashrc() {
-  local base_url="http://localhost:1234"
-  local marker="# local Claude Code → LM Studio direct (Anthropic-compatible API)"
-  local block="export ANTHROPIC_BASE_URL=${base_url}
-export ANTHROPIC_AUTH_TOKEN=lmstudio
-export ANTHROPIC_API_KEY=
-export CLAUDE_CODE_ATTRIBUTION_HEADER=0"
+# (update_shell_exports is defined earlier; use it with get_current_shell and CURRENT_* vars)
 
-  if grep -q "ANTHROPIC_BASE_URL" "$BASHRC" 2>/dev/null; then
-    if grep -q "$marker" "$BASHRC" 2>/dev/null; then
-      echo "  .bashrc already contains ANTHROPIC exports."
-      return 0
-    fi
-  fi
-  echo "" >> "$BASHRC"
-  echo "$marker" >> "$BASHRC"
-  echo "$block" >> "$BASHRC"
-  echo "  Appended Claude Code env block to: $BASHRC"
-}
-
-# --- Verify config and env ---
+# --- Verify config and export env for this process ---
+# Args: model_id, base_url, auth_token, api_key
 verify_and_export() {
-  local model_id="$1"
-  export ANTHROPIC_BASE_URL="http://localhost:1234"
-  export ANTHROPIC_AUTH_TOKEN="lmstudio"
-  export ANTHROPIC_API_KEY=""
+  local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}"
+  [[ -z "$api_key" ]] && api_key="$auth_token"
+  export ANTHROPIC_BASE_URL="$base_url"
+  export ANTHROPIC_AUTH_TOKEN="$auth_token"
+  export ANTHROPIC_API_KEY="$api_key"
   export CLAUDE_CODE_ATTRIBUTION_HEADER="0"
 
   if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
@@ -801,12 +1231,21 @@ verify_and_export() {
   echo ""
 }
 
+# --- Post-setup instructions (print after config is written) ---
+print_post_setup_instructions() {
+  echo ""
+  echo "Model is ready. You can:"
+  echo "  1) Start Claude Code in this terminal now (choose below)"
+  echo "  2) Use Claude in VS Code / Cursor: set claudeCode.environmentVariables to ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) from the config we wrote."
+  echo "  3) Use in Forks or other IDEs: same env vars in your Claude Code integration."
+  echo ""
+}
+
 # --- Main ---
 main() {
   local dry_run=0
   [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && print_help && exit 0
 
-  local dry_run=0
   [[ "${1:-}" == "--dry-run" || "${1:-}" == "--test" ]] && dry_run=1 && shift
 
   # --purge: interactive purge menu, then exit
@@ -827,18 +1266,27 @@ main() {
     if ! check_required_commands; then
       exit 1
     fi
-    if ! check_lm_studio_installed; then
-      exit 1
-    fi
     run_init
+    # Backend-specific check after we have prefs
+    local init_backend
+    init_backend=$(get_pref "backend")
+    case "$init_backend" in
+      lmstudio) check_lm_studio_installed || exit 1 ;;
+      ollama)   check_ollama_installed || exit 1 ;;
+      *)        ;;
+    esac
   fi
 
-  echo "Claudius v${VERSION} - Claude Code + LM Studio (direct)"
-  echo "LM Studio URL: $LMSTUDIO_URL"
+  resolve_backend
+
+  local platform
+  platform=$(detect_platform)
+  echo "Claudius v${VERSION} - Claude Code multi-backend (${CURRENT_BACKEND})"
+  echo "Backend: $CURRENT_BACKEND @ $CURRENT_BASE_URL"
   [[ "$dry_run" -eq 1 ]] && echo "(dry-run: will not write config or start claude)"
   echo ""
 
-  until check_server; do
+  until check_server_for_backend; do
     wait_for_server
   done
 
@@ -851,42 +1299,60 @@ main() {
   echo ""
 
   local context_length
-  context_length=$(select_context_length "$model_id" "$max_ctx") || exit 1
-  echo ""
-  echo "Context length: $context_length"
-  echo ""
+  if [[ "$CURRENT_BACKEND" == "lmstudio" ]]; then
+    context_length=$(select_context_length "$model_id" "$max_ctx") || exit 1
+    echo ""
+    echo "Context length: $context_length"
+    echo ""
+  else
+    context_length="$max_ctx"
+  fi
 
   if [[ "$dry_run" -eq 1 ]]; then
-    echo "[dry-run] Would load $model_id with context $context_length, write $CLAUDE_SETTINGS, run: claude --model $model_id"
+    echo "[dry-run] Would configure $model_id, write $CLAUDE_SETTINGS, run: claude --model $model_id"
     exit 0
   fi
 
-  check_memory_and_confirm "$model_id" "$context_length" || exit 1
-
-  echo "Loading model in LM Studio..."
-  if ! load_model_with_context "$model_id" "$context_length"; then
-    echo ""
-    echo "Model load failed. Check LM Studio server logs for details (e.g. out of memory, missing file)."
-    echo "Fix the issue and run claudius again, or choose another model/context length."
-    exit 1
+  if [[ "$CURRENT_BACKEND" == "lmstudio" ]]; then
+    check_memory_and_confirm "$model_id" "$context_length" || exit 1
+    echo "Loading model in LM Studio..."
+    local api_base="${CURRENT_BASE_URL}/api/v1"
+    if ! load_model_with_context "$model_id" "$context_length" "$api_base"; then
+      echo ""
+      echo "Model load failed. Check LM Studio server logs (e.g. out of memory, missing file)."
+      echo "Fix the issue and run claudius again, or choose another model/context length."
+      exit 1
+    fi
+  else
+    echo "  Using model: $model_id (no load step for $CURRENT_BACKEND)."
   fi
 
   echo "Writing config..."
-  write_settings "$model_id"
-  update_bashrc
-  verify_and_export "$model_id"
+  write_settings "$model_id" "$CURRENT_BASE_URL" "$CURRENT_AUTH" "$CURRENT_API_KEY"
+  local current_shell
+  current_shell=$(get_current_shell)
+  update_shell_exports "$current_shell" "$CURRENT_BASE_URL" "$CURRENT_AUTH" "$CURRENT_API_KEY"
+  verify_and_export "$model_id" "$CURRENT_BASE_URL" "$CURRENT_AUTH" "$CURRENT_API_KEY"
 
-  echo "Starting Claude Code..."
-  echo ""
+  print_post_setup_instructions
 
-  local keep_sess
-  keep_sess=$(get_keep_session_on_exit)
-  if [[ "$keep_sess" == "true" ]]; then
-    exec claude --model "$model_id"
-  else
-    claude --model "$model_id" || true
+  local start_now="y"
+  read -rp "Start Claude Code in this terminal now? [Y/n]: " start_now
+  start_now="${start_now:-y}"
+  if [[ "${start_now,,}" != "n" && "${start_now,,}" != "no" ]]; then
+    echo "Starting Claude Code..."
     echo ""
-    run_after_session_menu
+    local keep_sess
+    keep_sess=$(get_keep_session_on_exit)
+    if [[ "$keep_sess" == "true" ]]; then
+      exec claude --model "$model_id"
+    else
+      claude --model "$model_id" || true
+      echo ""
+      run_after_session_menu
+    fi
+  else
+    echo "Skipped. Run 'claude --model $model_id' when ready, or use VS Code / Cursor / Forks with the same env vars."
   fi
 }
 
