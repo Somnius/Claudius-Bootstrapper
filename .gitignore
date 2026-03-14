@@ -13,6 +13,9 @@ Thumbs.db
 *.swo
 *~
 
+# Local backups (versioned archives, exclude from repo)
+backups/
+
 # Sensitive or machine-specific
 .env
 .env.local
