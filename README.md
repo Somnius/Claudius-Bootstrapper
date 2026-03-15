@@ -19,7 +19,7 @@ Claudius lets you choose a backend, pick a model, and run Claude Code against it
 | **Backends** | **LM Studio** (local), **Ollama** (local), **OpenRouter** (cloud, API key), **Custom** (e.g. Alibaba Cloud — base URL + API key). Choose once at setup or with `claudius --init`. |
 | **First-time / `--init`** | Asks: show reply duration, keep session on exit, and **which backend** (1–4). Saves to `~/.claude/claudius-prefs.json`. For OpenRouter/Custom, prompts for API key (and custom URL). |
 | **Platform & deps** | Detects Linux/macOS/Windows and prints install hints for curl, jq, claude (e.g. apt/dnf/pacman on Linux, brew on macOS). Does not auto-install packages. |
-| **Server check** | Verifies backend is reachable; for LM Studio/Ollama offers Resume / Start server / Abort; for OpenRouter/Custom offers Retry / Abort. |
+| **Server check** | Verifies backend is reachable; for LM Studio/Ollama offers Resume / Start local server / **Remote** (connect to another machine: enter IP:port and backend type) / Abort; for OpenRouter/Custom offers Retry / Abort. |
 | **Model list** | Fetches models from the chosen backend (LM Studio native API, Ollama `/api/tags`, OpenRouter/Custom `GET /models` with Bearer). Numbered menu to pick one. |
 | **Context length** | **LM Studio only:** pick context size, then script unloads current model and loads the selected one with that length (spinner). Ollama/OpenRouter/Custom: no load step; model is used as-is. |
 | **Memory check** | **LM Studio only:** checks RAM/VRAM before load and warns if insufficient. |
@@ -87,7 +87,7 @@ Set up the alias (see [SHELL-SETUP.md](SHELL-SETUP.md)) so `claudius` runs the s
 claudius
 ```
 
-Start your backend first if local (LM Studio or Ollama); for OpenRouter/Custom ensure your API key is set (in prefs or env). Then: choose model → for LM Studio only, choose context length and wait for load → script writes config and asks “Start Claude Code now? [Y/n]”. If you chose not to keep session history, after you exit Claude Code you get a menu to delete the current session, purge by age, or skip.
+Start your backend first if local (LM Studio or Ollama), or when the server is not reachable choose **Remote** and enter the other machine’s address (e.g. `192.168.1.10:1234`) and backend type (LM Studio or Ollama). For OpenRouter/Custom ensure your API key is set. Then: choose model → for LM Studio only, choose context length and wait for load → script writes config and asks “Start Claude Code now? [Y/n]”. If you chose not to keep session history, after you exit Claude Code you get a menu to delete the current session, purge by age, or skip.
 
 ### Reset preferences (first-time questions again)
 
@@ -123,10 +123,14 @@ Runs server check, model selection, and context-length choice, then exits withou
 CLAUDIUS_BACKEND=ollama claudius
 CLAUDIUS_BACKEND=custom CLAUDIUS_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1 CLAUDIUS_API_KEY=sk-xxx claudius
 
-# Override default URLs per backend
+# Override default URLs per backend (local or remote)
 LMSTUDIO_URL=http://127.0.0.1:1234 claudius
-OLLAMA_URL=http://127.0.0.1:11434 claudius
+OLLAMA_URL=http://192.168.1.10:11434 claudius
 ```
+
+### Remote server (different machine)
+
+When the local server is not running, choose **3) Remote** in the menu. Enter the server address (e.g. `192.168.1.10:1234` or `myserver:11434`) and whether it runs LM Studio (port 1234) or Ollama (port 11434). The script saves the URL to prefs and queries models on that host. Use this when the backend runs on another machine (e.g. a desktop with a GPU while you run Claudius on a laptop).
 
 ### Using Claude Code in VS Code (chat panel)
 
@@ -202,7 +206,7 @@ Optional local docs (gitignored, not in the repo by default): `GUIDE-VSCODE-CLAU
 ## Troubleshooting
 
 - **First run: “Missing required command(s)” or backend not installed** – Install the missing tools (script prints platform-specific hints: curl, jq, claude). For LM Studio install from https://lmstudio.ai; for Ollama from https://ollama.com. Then run `claudius --init` to continue.
-- **Server not running** – For LM Studio: start Local Inference Server or run `lms server start`. For Ollama: run `ollama serve`. Then choose 1 (Resume). For OpenRouter/Custom: check API key and network, then Retry.
+- **Server not running** – For LM Studio/Ollama: start the server locally or choose **3) Remote** and enter the other machine’s IP:port and backend type (LM Studio 1234, Ollama 11434). Then choose 1 (Resume) to retry. For OpenRouter/Custom: check API key and network, then Retry.
 - **Memory check / “Proceed anyway?”** – The script estimates RAM + VRAM need from model size and context length. If you see the notice, try a smaller context length (e.g. 2048 or 34304) to avoid LM Studio load failures. GPU detection: NVIDIA uses `nvidia-smi`; AMD and Intel (including Arc) use `/sys/class/drm` when the driver exposes VRAM info; if no GPU is detected, only system RAM is considered.
 - **`lms` not found** – Add LM Studio’s CLI to PATH (e.g. `~/.lmstudio/bin`) or start the server from the GUI.
 - **No models** – LM Studio: load at least one model and ensure the server is running. Ollama: run `ollama pull <name>` and ensure `ollama serve` is running. OpenRouter/Custom: check API key and base URL; the provider’s `GET .../models` must return a list.

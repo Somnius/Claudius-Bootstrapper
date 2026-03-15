@@ -494,6 +494,60 @@ run_after_session_menu() {
   return 0
 }
 
+# --- Normalize user-entered server address to base URL (http://host:port) ---
+# Args: address (e.g. 192.168.1.10:1234, myserver, http://host:11434), default_port
+# Output: base URL (no trailing slash)
+normalize_remote_url() {
+  local raw="${1:-}" default_port="${2:-1234}"
+  raw=$(echo "$raw" | tr -d ' \t')
+  [[ -z "$raw" ]] && echo "" && return 1
+  if [[ "$raw" == https://* || "$raw" == http://* ]]; then
+    echo "${raw%/}"
+    return 0
+  fi
+  if [[ "$raw" =~ ^([^:]+):([0-9]+)$ ]]; then
+    echo "http://${BASH_REMATCH[1]}:${BASH_REMATCH[2]}"
+    return 0
+  fi
+  echo "http://${raw}:${default_port}"
+  return 0
+}
+
+# --- Prompt for remote server address and backend type; set CURRENT_BASE_URL, CURRENT_BACKEND and save to prefs ---
+prompt_remote_server() {
+  local addr backend_num default_port
+  echo "Connect to a remote server (e.g. another machine on your network)."
+  read -rp "Enter server address (host or IP:port, e.g. 192.168.1.10:1234): " addr
+  addr=$(echo "$addr" | tr -d ' \t')
+  if [[ -z "$addr" ]]; then
+    echo "  No address entered. Skipped."
+    return 1
+  fi
+  echo ""
+  echo "Backend running on this server:"
+  echo "  1) LM Studio (default port 1234)"
+  echo "  2) Ollama (default port 11434)"
+  read -rp "Choose (1-2): " backend_num
+  case "$backend_num" in
+    1) CURRENT_BACKEND="lmstudio"; default_port=1234 ;;
+    2) CURRENT_BACKEND="ollama";   default_port=11434 ;;
+    *) echo "  Invalid choice. Using LM Studio (1234)."; CURRENT_BACKEND="lmstudio"; default_port=1234 ;;
+  esac
+  CURRENT_BASE_URL=$(normalize_remote_url "$addr" "$default_port")
+  if [[ -z "$CURRENT_BASE_URL" ]]; then
+    echo "  Could not parse address. Skipped."
+    return 1
+  fi
+  case "$CURRENT_BACKEND" in
+    lmstudio) CURRENT_AUTH="lmstudio" ;;
+    ollama)   CURRENT_AUTH="" ;;
+    *)        CURRENT_AUTH="$CURRENT_API_KEY" ;;
+  esac
+  merge_prefs "$CURRENT_BACKEND" "$CURRENT_BASE_URL" "$CURRENT_API_KEY"
+  echo "  Using $CURRENT_BACKEND @ $CURRENT_BASE_URL"
+  return 0
+}
+
 # --- Resolve backend from env or prefs; set CURRENT_BACKEND, CURRENT_BASE_URL, CURRENT_API_KEY, CURRENT_AUTH ---
 resolve_backend() {
   if [[ -n "${CLAUDIUS_BACKEND:-}" ]]; then
@@ -553,13 +607,14 @@ wait_for_server() {
     fi
     echo "LM Studio server is not running at ${CURRENT_BASE_URL}."
     echo ""
-    echo "  1) Resume  - I've started the server; check again."
-    echo "  2) Start   - Try to start the server (runs: lms server start)."
-    echo "  3) Abort   - Exit."
+    echo "  1) Resume       - I've started the server; check again."
+    echo "  2) Start        - Try to start the server locally (runs: lms server start)."
+    echo "  3) Remote       - Connect to a remote server (different machine, IP:port)."
+    echo "  4) Abort        - Exit."
     echo ""
     local choice
     while true; do
-      read -rp "Choose (1-3): " choice
+      read -rp "Choose (1-4): " choice
       case "$choice" in
         1)
           if check_server_for_backend; then
@@ -581,24 +636,35 @@ wait_for_server() {
             echo "Server may still be starting. Choose Resume to retry or Abort."
           else
             echo "Command 'lms' not found. Install LM Studio and ensure 'lms' is on your PATH."
-            echo "Start the server from the LM Studio GUI, then choose Resume."
+            echo "Start the server from the LM Studio GUI, or choose Remote to use another machine."
           fi
           echo ""
           ;;
-        3) echo "Aborted."; exit 1 ;;
-        *) echo "Invalid choice. Enter 1, 2, or 3."; echo "" ;;
+        3)
+          if prompt_remote_server; then
+            if check_server_for_backend; then
+              echo "Server is up. Continuing."
+              return 0
+            fi
+            echo "Still not reachable. Check address and that the server is running, then try again."
+          fi
+          echo ""
+          ;;
+        4) echo "Aborted."; exit 1 ;;
+        *) echo "Invalid choice. Enter 1, 2, 3, or 4."; echo "" ;;
       esac
     done
   elif [[ "$CURRENT_BACKEND" == "ollama" ]]; then
     echo "Ollama server is not running at ${CURRENT_BASE_URL}."
     echo ""
-    echo "  1) Resume  - I've started the server (e.g. ollama serve); check again."
-    echo "  2) Start   - Try to start Ollama (runs: ollama serve in background)."
-    echo "  3) Abort   - Exit."
+    echo "  1) Resume       - I've started the server (e.g. ollama serve); check again."
+    echo "  2) Start        - Try to start Ollama locally (runs: ollama serve in background)."
+    echo "  3) Remote       - Connect to a remote server (different machine, IP:port)."
+    echo "  4) Abort        - Exit."
     echo ""
     local choice
     while true; do
-      read -rp "Choose (1-3): " choice
+      read -rp "Choose (1-4): " choice
       case "$choice" in
         1)
           if check_server_for_backend; then
@@ -619,12 +685,22 @@ wait_for_server() {
             fi
             echo "Server may still be starting. Choose Resume to retry or Abort."
           else
-            echo "Command 'ollama' not found. Install from https://ollama.com and run 'ollama serve'."
+            echo "Command 'ollama' not found. Install from https://ollama.com and run 'ollama serve', or choose Remote to use another machine."
           fi
           echo ""
           ;;
-        3) echo "Aborted."; exit 1 ;;
-        *) echo "Invalid choice. Enter 1, 2, or 3."; echo "" ;;
+        3)
+          if prompt_remote_server; then
+            if check_server_for_backend; then
+              echo "Server is up. Continuing."
+              return 0
+            fi
+            echo "Still not reachable. Check address and that the server is running, then try again."
+          fi
+          echo ""
+          ;;
+        4) echo "Aborted."; exit 1 ;;
+        *) echo "Invalid choice. Enter 1, 2, 3, or 4."; echo "" ;;
       esac
     done
   else
