@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-VERSION="0.8.1"
+VERSION="0.8.2"
 
 # --help function: Display usage information
 print_help() {
@@ -105,9 +105,10 @@ get_shell_config_file() {
 }
 
 # --- Append Claude Code env block to the correct config file with correct syntax ---
-# Args: shell, base_url, auth_token, api_key (auth_token for LM Studio placeholder; api_key for Bearer backends)
+# Args: shell, base_url, auth_token, api_key, backend
+# For openrouter|custom only ANTHROPIC_API_KEY; for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN (avoids Claude "auth conflict").
 update_shell_exports() {
-  local shell="${1:-bash}" base_url="$2" auth_token="${3:-}" api_key="${4:-}"
+  local shell="${1:-bash}" base_url="$2" auth_token="${3:-}" api_key="${4:-}" backend="${5:-lmstudio}"
   local config_file marker block
   config_file=$(get_shell_config_file "$shell")
   marker="# Claude Code → Claudius (ANTHROPIC_BASE_URL for backend)"
@@ -117,20 +118,29 @@ update_shell_exports() {
     return 0
   fi
 
-  local token_to_use="$auth_token"
-  [[ -n "$api_key" ]] && token_to_use="$api_key"
-
   if [[ "$shell" == "fish" ]]; then
     mkdir -p "${HOME}/.config/fish"
-    block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
-set -gx ANTHROPIC_AUTH_TOKEN \"${token_to_use}\"
+    case "$backend" in
+      openrouter|custom)
+        block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
 set -gx ANTHROPIC_API_KEY \"${api_key}\"
-set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0"
+set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
+      *)
+        block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
+set -gx ANTHROPIC_AUTH_TOKEN \"${auth_token}\"
+set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
+    esac
   else
-    block="export ANTHROPIC_BASE_URL=\"${base_url}\"
-export ANTHROPIC_AUTH_TOKEN=\"${token_to_use}\"
+    case "$backend" in
+      openrouter|custom)
+        block="export ANTHROPIC_BASE_URL=\"${base_url}\"
 export ANTHROPIC_API_KEY=\"${api_key}\"
-export CLAUDE_CODE_ATTRIBUTION_HEADER=0"
+export CLAUDE_CODE_ATTRIBUTION_HEADER=0" ;;
+      *)
+        block="export ANTHROPIC_BASE_URL=\"${base_url}\"
+export ANTHROPIC_AUTH_TOKEN=\"${auth_token}\"
+export CLAUDE_CODE_ATTRIBUTION_HEADER=0" ;;
+    esac
   fi
 
   echo "" >> "$config_file"
@@ -913,9 +923,10 @@ fetch_models_openrouter() {
     echo "Error: Could not reach OpenRouter. Check API key and network." >&2
     return 1
   fi
+  # Context/max tokens: use provider value when present; fallback 32768 when API does not advertise
   if command -v jq &>/dev/null; then
     if echo "$resp" | jq -e '.data[]?' &>/dev/null; then
-      echo "$resp" | jq -r '.data[] | "\(.id)|\(.context_length // 32768)"'
+      echo "$resp" | jq -r '.data[] | "\(.id)|\(.context_length // .max_tokens // .max_context_tokens // .max_input_tokens // 32768)"'
       return 0
     fi
   else
@@ -925,7 +936,7 @@ try:
     d = json.load(sys.stdin)
     for m in d.get('data', []):
         mid = m.get('id', '')
-        ctx = m.get('context_length', 32768)
+        ctx = m.get('context_length') or m.get('max_tokens') or m.get('max_context_tokens') or m.get('max_input_tokens') or 32768
         if mid:
             print(str(mid) + '|' + str(ctx))
 except Exception:
@@ -965,9 +976,10 @@ fetch_models_custom() {
     echo "Error: Could not reach custom API at ${base_url}. Check URL and API key." >&2
     return 1
   fi
+  # Context/max tokens: use provider value when present (context_length, max_tokens, etc.); fallback 32768 only when API does not advertise
   if command -v jq &>/dev/null; then
     if echo "$resp" | jq -e '.data[]?' &>/dev/null; then
-      echo "$resp" | jq -r '.data[] | "\(.id)|\(.context_length // 32768)"'
+      echo "$resp" | jq -r '.data[] | "\(.id)|\(.context_length // .max_tokens // .max_context_tokens // .max_input_tokens // 32768)"'
       return 0
     fi
   else
@@ -977,7 +989,7 @@ try:
     d = json.load(sys.stdin)
     for m in d.get('data', []):
         mid = m.get('id', '')
-        ctx = m.get('context_length', 32768)
+        ctx = m.get('context_length') or m.get('max_tokens') or m.get('max_context_tokens') or m.get('max_input_tokens') or 32768
         if mid:
             print(str(mid) + '|' + str(ctx))
 except Exception:
@@ -1333,40 +1345,66 @@ load_model_with_context() {
 }
 
 # --- Update ~/.claude/settings.json ---
-# Args: model_id, base_url, auth_token (e.g. lmstudio or API key), api_key (for env, can be same as auth)
+# Args: model_id, base_url, auth_token, api_key, backend
+# For openrouter|custom only ANTHROPIC_API_KEY is set (avoids Claude Code "auth conflict"); for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN.
 write_settings() {
-  local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}"
+  local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}" backend="${5:-lmstudio}"
   [[ -z "$api_key" ]] && api_key="$auth_token"
   local show_turn
   show_turn=$(get_show_turn_duration)
   local schema="https://json.schemastore.org/claude-code-settings.json"
   local tmp
   tmp=$(mktemp)
-  if command -v jq &>/dev/null; then
-    jq -n \
-      --arg schema "$schema" \
-      --arg base "$base_url" \
-      --arg auth "$auth_token" \
-      --arg apik "$api_key" \
-      --arg model "$model_id" \
-      --arg show_turn "$show_turn" \
-      '{"$schema": $schema, "env": {"ANTHROPIC_BASE_URL": $base, "ANTHROPIC_AUTH_TOKEN": $auth, "ANTHROPIC_API_KEY": $apik}, "defaultModel": $model, "showTurnDuration": ($show_turn == "true")}' \
-      > "$tmp"
-  else
-    python3 -c "
+  case "$backend" in
+    openrouter|custom)
+      if command -v jq &>/dev/null; then
+        jq -n \
+          --arg schema "$schema" \
+          --arg base "$base_url" \
+          --arg apik "$api_key" \
+          --arg model "$model_id" \
+          --arg show_turn "$show_turn" \
+          '{"$schema": $schema, "env": {"ANTHROPIC_BASE_URL": $base, "ANTHROPIC_API_KEY": $apik}, "defaultModel": $model, "showTurnDuration": ($show_turn == "true")}' \
+          > "$tmp"
+      else
+        python3 -c "
 import json
 print(json.dumps({
     \"\$schema\": \"$schema\",
     \"env\": {
         \"ANTHROPIC_BASE_URL\": \"$base_url\",
-        \"ANTHROPIC_AUTH_TOKEN\": \"$auth_token\",
         \"ANTHROPIC_API_KEY\": \"$api_key\"
     },
     \"defaultModel\": \"$model_id\",
-    \"showTurnDuration\": ($show_turn == "true")
+    \"showTurnDuration\": ($show_turn == \"true\")
 }, indent=2))
 " > "$tmp"
-  fi
+      fi ;;
+    *)
+      if command -v jq &>/dev/null; then
+        jq -n \
+          --arg schema "$schema" \
+          --arg base "$base_url" \
+          --arg auth "$auth_token" \
+          --arg model "$model_id" \
+          --arg show_turn "$show_turn" \
+          '{"$schema": $schema, "env": {"ANTHROPIC_BASE_URL": $base, "ANTHROPIC_AUTH_TOKEN": $auth}, "defaultModel": $model, "showTurnDuration": ($show_turn == "true")}' \
+          > "$tmp"
+      else
+        python3 -c "
+import json
+print(json.dumps({
+    \"\$schema\": \"$schema\",
+    \"env\": {
+        \"ANTHROPIC_BASE_URL\": \"$base_url\",
+        \"ANTHROPIC_AUTH_TOKEN\": \"$auth_token\"
+    },
+    \"defaultModel\": \"$model_id\",
+    \"showTurnDuration\": ($show_turn == \"true\")
+}, indent=2))
+" > "$tmp"
+      fi ;;
+  esac
   mkdir -p "$(dirname "$CLAUDE_SETTINGS")"
   mv "$tmp" "$CLAUDE_SETTINGS"
   echo "  Updated: $CLAUDE_SETTINGS (defaultModel = $model_id)"
@@ -1375,14 +1413,23 @@ print(json.dumps({
 # (update_shell_exports is defined earlier; use it with get_current_shell and CURRENT_* vars)
 
 # --- Verify config and export env for this process ---
-# Args: model_id, base_url, auth_token, api_key
+# Args: model_id, base_url, auth_token, api_key, backend
+# For openrouter|custom only export ANTHROPIC_API_KEY; for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN (avoids Claude "auth conflict").
 verify_and_export() {
-  local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}"
+  local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}" backend="${5:-lmstudio}"
   [[ -z "$api_key" ]] && api_key="$auth_token"
   export ANTHROPIC_BASE_URL="$base_url"
-  export ANTHROPIC_AUTH_TOKEN="$auth_token"
-  export ANTHROPIC_API_KEY="$api_key"
   export CLAUDE_CODE_ATTRIBUTION_HEADER="0"
+  case "$backend" in
+    openrouter|custom)
+      unset -v ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
+      export ANTHROPIC_API_KEY="$api_key"
+      ;;
+    *)
+      unset -v ANTHROPIC_API_KEY 2>/dev/null || true
+      export ANTHROPIC_AUTH_TOKEN="$auth_token"
+      ;;
+  esac
 
   if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
     echo "Warning: $CLAUDE_SETTINGS not found after write." >&2
@@ -1401,6 +1448,10 @@ verify_and_export() {
   echo ""
   echo "Verified:"
   echo "  ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"
+  case "$backend" in
+    openrouter|custom) echo "  ANTHROPIC_API_KEY=<set>" ;;
+    *) echo "  ANTHROPIC_AUTH_TOKEN=<set>" ;;
+  esac
   echo "  defaultModel (for this run)= $model_id"
   echo ""
 }
@@ -1521,11 +1572,11 @@ main() {
   fi
 
   echo "Writing config..."
-  write_settings "$model_id" "$CURRENT_BASE_URL" "$CURRENT_AUTH" "$CURRENT_API_KEY"
+  write_settings "$model_id" "$CURRENT_BASE_URL" "$CURRENT_AUTH" "$CURRENT_API_KEY" "$CURRENT_BACKEND"
   local current_shell
   current_shell=$(get_current_shell)
-  update_shell_exports "$current_shell" "$CURRENT_BASE_URL" "$CURRENT_AUTH" "$CURRENT_API_KEY"
-  verify_and_export "$model_id" "$CURRENT_BASE_URL" "$CURRENT_AUTH" "$CURRENT_API_KEY"
+  update_shell_exports "$current_shell" "$CURRENT_BASE_URL" "$CURRENT_AUTH" "$CURRENT_API_KEY" "$CURRENT_BACKEND"
+  verify_and_export "$model_id" "$CURRENT_BASE_URL" "$CURRENT_AUTH" "$CURRENT_API_KEY" "$CURRENT_BACKEND"
 
   print_post_setup_instructions
 
