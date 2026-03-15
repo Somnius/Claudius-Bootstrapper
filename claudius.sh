@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Claudius v0.9.0 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, Custom, NewAPI).
+# Claudius v0.9.1 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, Custom, NewAPI).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context (where applicable), update config, run claude.
 # Supports: bash, zsh, fish, ksh, sh. Platforms: Linux, macOS, Windows (Git Bash/WSL).
 
 set -euo pipefail
 
-VERSION="0.9.0"
+VERSION="0.9.1"
 
 # --help function: Display usage information
 print_help() {
   cat << 'EOF'
 Usage: claudius [OPTIONS]
 
-Claudius v0.9.0 - Claude Code multi-backend bootstrapper
+Claudius v0.9.1 - Claude Code multi-backend bootstrapper
 
 Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, OpenRouter, Custom (many presets),
 or NewAPI (QuantumNous unified gateway). Custom presets: Alibaba, Kimi, DeepSeek, Groq, OpenRouter, xAI,
@@ -26,6 +26,7 @@ Options:
   --purge       Interactive menu to purge saved Claude Code session data
   --dry-run     Test flow without writing config or starting Claude
   --test        Alias for --dry-run
+  --by-pass-start  Do not ask to start Claude Code after setup; exit once config is written (for use in scripts)
 
 Environment Variables:
   CLAUDIUS_BACKEND   Backend: lmstudio | ollama | openrouter | custom
@@ -38,6 +39,7 @@ Environment Variables:
 Examples:
   claudius                          # Run full flow: choose backend, model, start Claude
   claudius --init                   # Reset preferences and re-choose backend
+  claudius --init --by-pass-start   # Re-choose backend and model, write config, then exit (no start prompt)
   claudius --purge                  # Clear session data interactively
   CLAUDIUS_BACKEND=ollama claudius  # Use Ollama (if already configured)
 
@@ -1551,8 +1553,10 @@ print_post_setup_instructions() {
 
 # --- Main ---
 main() {
-  local dry_run=0
+  local dry_run=0 bypass_start=0
   [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && print_help && exit 0
+
+  for a in "$@"; do [[ "$a" == "--by-pass-start" ]] && bypass_start=1 && break; done
 
   [[ "${1:-}" == "--dry-run" || "${1:-}" == "--test" ]] && dry_run=1 && shift
 
@@ -1666,6 +1670,11 @@ main() {
   verify_and_export "$model_id" "$effective_base" "$CURRENT_AUTH" "$CURRENT_API_KEY" "$CURRENT_BACKEND"
 
   print_post_setup_instructions
+
+  if [[ "$bypass_start" -eq 1 ]]; then
+    echo "Config written. Run 'claude --model $model_id' when ready, or call the bootstrapper from your script."
+    exit 0
+  fi
 
   local start_now="y"
   read -rp "Start Claude Code in this terminal now? [Y/n]: " start_now

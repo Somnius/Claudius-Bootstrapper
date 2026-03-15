@@ -28,6 +28,7 @@ Claudius lets you choose a backend, pick a model, and run Claude Code against it
 | **Session on exit** | If you chose not to keep session history, after Claude Code exits you get a menu: delete current session, purge all (2 confirmations), or purge by age. |
 | **`--purge`** | Interactive menu to purge saved session data. Settings and Claudius prefs are never removed. |
 | **`--dry-run` / `--test`** | Run server check and model selection without writing config or starting Claude. |
+| **`--by-pass-start`** | Run full setup (model, config write) but do not ask to start Claude Code; exit after writing config (for use in scripts). |
 
 ---
 
@@ -96,8 +97,17 @@ Start your backend first if local (LM Studio or Ollama), or when the server is n
 claudius --init
 ```
 
-Re-asks: show reply duration, keep session history on exit, and **which backend** (1–4). Saves to `~/.claude/claudius-prefs.json`.  
+Re-asks: show reply duration, keep session history on exit, and **which backend** (1–5). Saves to `~/.claude/claudius-prefs.json`.  
 If the script reported missing dependencies (required commands or backend app), install them, then run `claudius --init` to continue.
+
+### Bypass start prompt (for scripts)
+
+```bash
+claudius --by-pass-start
+claudius --init --by-pass-start
+```
+
+Runs the full flow (backend check, model selection, config write) but **does not** ask “Start Claude Code now?” and does not start the CLI. Exits after writing config. Use from your own scripts to configure Claude Code non-interactively or to chain with other tools.
 
 ### Purge saved session data
 
@@ -170,6 +180,7 @@ Then `source ~/.bashrc` or open a new shell. For **zsh**, **fish**, **ksh**, and
 
 ## Changelog
 
+- **0.9.1** (2026-03-15) – **`--by-pass-start`:** Do not ask to start Claude Code after setup; exit once config is written. Use with `claudius --by-pass-start` or `claudius --init --by-pass-start` to integrate the bootstrapper into other scripts.
 - **0.9.0** (2026-03-15) – **NewAPI backend and more Custom presets.** **NewAPI:** New backend option 5 — [QuantumNous new-api](https://github.com/QuantumNous/new-api) unified gateway. Enter root URL (e.g. `http://localhost:8080`) and API key; script lists models via `GET /api/models` (channel→models), writes Claude Code base as `url/v1`. **Custom presets:** Added **xAI (Grok)** (`api.x.ai/v1`) and **OpenAI** (`api.openai.com/v1`); menu now 1–8 (Alibaba, Kimi, DeepSeek, Groq, OpenRouter, xAI, OpenAI, Other). Env/auth: NewAPI uses API key only (no auth conflict).
 - **0.8.3** (2026-03-15) – **Custom provider presets:** When you choose backend **Custom**, a sub-menu offers: **Alibaba Cloud (DashScope)** (Singapore), **Kimi (Moonshot AI)** (global), **DeepSeek**, **Groq**, **OpenRouter** (alternative to backend 3), or **Other** (enter base URL and API key). Each preset uses the correct base URL for that provider; you only enter the API key. Endpoints were verified from official docs (list models: OpenAI-style `GET .../models` or `.../v1/models`, Bearer auth).
 - **0.8.2** (2026-03-15) – **Custom/OpenRouter max tokens:** The “max N tokens” shown for each model is taken from the provider’s list-models response when available. The script now checks several common fields: `context_length`, `max_tokens`, `max_context_tokens`, `max_input_tokens`. If the API does not advertise any of these (e.g. some compatible-mode list endpoints), a fallback of 32768 is shown; that value is from Claudius, not the provider.
