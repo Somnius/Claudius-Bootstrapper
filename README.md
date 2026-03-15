@@ -16,7 +16,7 @@ Claudius lets you choose a backend, pick a model, and run Claude Code against it
 
 | Feature | Description |
 |--------|-------------|
-| **Backends** | **LM Studio** (local), **Ollama** (local), **OpenRouter** (cloud, API key), **Custom** (e.g. Alibaba Cloud — base URL + API key). Choose once at setup or with `claudius --init`. |
+| **Backends** | **LM Studio**, **Ollama**, **OpenRouter**, **Custom**. For Custom, choose a preset (Alibaba/DashScope, Kimi/Moonshot, DeepSeek, Groq, OpenRouter) or Other (enter base URL + API key). Choose once at setup or with `claudius --init`. |
 | **First-time / `--init`** | Asks: show reply duration, keep session on exit, and **which backend** (1–4). Saves to `~/.claude/claudius-prefs.json`. For OpenRouter/Custom, prompts for API key (and custom URL). |
 | **Platform & deps** | Detects Linux/macOS/Windows and prints install hints for curl, jq, claude (e.g. apt/dnf/pacman on Linux, brew on macOS). Does not auto-install packages. |
 | **Server check** | Verifies backend is reachable; for LM Studio/Ollama offers Resume / Start local server / **Remote** (connect to another machine: enter IP:port and backend type) / Abort; for OpenRouter/Custom offers Retry / Abort. |
@@ -38,7 +38,7 @@ Claudius lets you choose a backend, pick a model, and run Claude Code against it
 | **LM Studio** | `http://localhost:1234` | None (placeholder token) | Local; list/load via native API; context length and memory check. |
 | **Ollama** | `http://localhost:11434` | None | Local; list via `/api/tags`; no load step (model used on first request). |
 | **OpenRouter** | `https://openrouter.ai/api/v1` | API key (Bearer) | Cloud; list via `/models`; prompt for key at setup. |
-| **Custom** | User-provided (e.g. Alibaba `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`) | API key (Bearer) | OpenAI-compatible `GET .../models`; list and pick model (e.g. qwen-max, qwen3.5-9b). |
+| **Custom** | Preset or user URL | API key (Bearer) | When you choose Custom, pick a preset or Other. **Presets** (Claudius fills base URL; you enter API key): **Alibaba (DashScope)** — Singapore `dashscope-intl.aliyuncs.com/compatible-mode/v1`; **Kimi (Moonshot)** — `api.moonshot.ai/v1`; **DeepSeek** — `api.deepseek.com/v1`; **Groq** — `api.groq.com/openai/v1`; **OpenRouter** — same as backend 3. **Other:** enter any OpenAI-compatible base URL and API key. All use `GET .../models` (or `.../v1/models`) for listing. |
 
 Override with env: `CLAUDIUS_BACKEND`, `CLAUDIUS_BASE_URL`, `CLAUDIUS_API_KEY`, `LMSTUDIO_URL`, `OLLAMA_URL`, `OPENROUTER_URL`.
 
@@ -169,6 +169,7 @@ Then `source ~/.bashrc` or open a new shell. For **zsh**, **fish**, **ksh**, and
 
 ## Changelog
 
+- **0.8.3** (2026-03-15) – **Custom provider presets:** When you choose backend **Custom**, a sub-menu offers: **Alibaba Cloud (DashScope)** (Singapore), **Kimi (Moonshot AI)** (global), **DeepSeek**, **Groq**, **OpenRouter** (alternative to backend 3), or **Other** (enter base URL and API key). Each preset uses the correct base URL for that provider; you only enter the API key. Endpoints were verified from official docs (list models: OpenAI-style `GET .../models` or `.../v1/models`, Bearer auth).
 - **0.8.2** (2026-03-15) – **Custom/OpenRouter max tokens:** The “max N tokens” shown for each model is taken from the provider’s list-models response when available. The script now checks several common fields: `context_length`, `max_tokens`, `max_context_tokens`, `max_input_tokens`. If the API does not advertise any of these (e.g. some compatible-mode list endpoints), a fallback of 32768 is shown; that value is from Claudius, not the provider.
 - **0.8.1** (2026-03-15) – **Remote server, already-loaded context, Claude Code install:** When LM Studio/Ollama server is not reachable, new option **3) Remote** prompts for server address (host or IP:port) and backend type (LM Studio/Ollama), saves to prefs and continues. **LM Studio:** if the selected model is already loaded, script shows current context length and offers keep or change (5+1 options); choosing keep skips unload/reload. **Claude Code CLI:** script prepends `~/.local/bin` to PATH before checking for `claude`, so an existing install there is detected even if the current shell has not loaded that path; if still missing, offers install. **Other:** ignore `backups/` in git; README title Claudius-Bootstrapper; clearer error when CLI not found.
 - **0.8.0** (2026-03-14) – **Multi-backend and multi-shell refactor:** Backends: LM Studio, Ollama, OpenRouter, custom API (e.g. Alibaba Cloud). Choose backend at setup or via `CLAUDIUS_BACKEND`; custom/OpenRouter use base URL and API key. Platform detection (Linux/macOS/Windows) with per-OS install hints for curl/jq/claude. Shell-aware config: appends env vars to the correct file (bash/zsh/fish/ksh/sh) with correct syntax (`set -gx` for fish). Post-setup instructions (VS Code/Cursor/Forks) and “Start Claude Code now? [Y/n]”. No load step for Ollama/OpenRouter/Custom; context and memory check only for LM Studio.

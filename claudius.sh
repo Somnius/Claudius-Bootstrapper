@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# Claudius v0.8.1 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, custom API).
+# Claudius v0.8.3 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, custom API).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context (where applicable), update config, run claude.
 # Supports: bash, zsh, fish, ksh, sh. Platforms: Linux, macOS, Windows (Git Bash/WSL).
 
 set -euo pipefail
 
-VERSION="0.8.2"
+VERSION="0.8.3"
 
 # --help function: Display usage information
 print_help() {
   cat << 'EOF'
 Usage: claudius [OPTIONS]
 
-Claudius v0.8.1 - Claude Code multi-backend bootstrapper
+Claudius v0.8.3 - Claude Code multi-backend bootstrapper
 
 Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, OpenRouter, or a custom
-OpenAI-compatible API (e.g. Alibaba Cloud). Writes env vars to your shell config (bash/zsh/fish/ksh/sh).
+OpenAI-compatible API. Custom option includes presets: Alibaba (DashScope), Kimi (Moonshot), DeepSeek,
+Groq, OpenRouter, or Other (enter URL + key). Writes env vars to your shell config (bash/zsh/fish/ksh/sh).
 
 Options:
   --help, -h    Show this help message and exit
@@ -321,7 +322,7 @@ run_init() {
   echo "  1) LM Studio (local, default http://localhost:1234)"
   echo "  2) Ollama (local, default http://localhost:11434)"
   echo "  3) OpenRouter (cloud, requires API key)"
-  echo "  4) Custom (e.g. Alibaba Cloud — enter base URL and API key)"
+  echo "  4) Custom (Alibaba, Kimi, DeepSeek, Groq, OpenRouter, or other — API key)"
   echo ""
   local backend_choice backend="lmstudio" base_url="$LMSTUDIO_URL" api_key=""
   read -rp "Choose (1-4) [1]: " backend_choice
@@ -337,9 +338,31 @@ run_init() {
       ;;
     4)
       backend="custom"
-      read -rp "Custom API base URL (e.g. https://dashscope-intl.aliyuncs.com/compatible-mode/v1): " base_url
+      echo "Choose custom provider (OpenAI-compatible API):"
+      echo "  1) Alibaba Cloud (DashScope) — Singapore: dashscope-intl.aliyuncs.com"
+      echo "  2) Kimi (Moonshot AI) — global: api.moonshot.ai"
+      echo "  3) DeepSeek — api.deepseek.com"
+      echo "  4) Groq — api.groq.com/openai/v1"
+      echo "  5) OpenRouter — openrouter.ai (same as backend 3, alternative entry)"
+      echo "  6) Other — enter base URL and API key"
+      echo ""
+      local custom_choice
+      read -rp "Choose (1-6) [1]: " custom_choice
+      custom_choice="${custom_choice:-1}"
+      case "$custom_choice" in
+        1) base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1" ;;
+        2) base_url="https://api.moonshot.ai/v1" ;;
+        3) base_url="https://api.deepseek.com/v1" ;;
+        4) base_url="https://api.groq.com/openai/v1" ;;
+        5) base_url="${OPENROUTER_URL}" ;;
+        6)
+          read -rp "Custom API base URL (e.g. https://api.example.com/v1): " base_url
+          ;;
+        *) base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1" ;;
+      esac
       read -rp "API key: " api_key
-      [[ -z "$base_url" || -z "$api_key" ]] && echo "  Warning: URL or key empty; list models may fail." >&2
+      [[ -z "$api_key" ]] && echo "  Warning: API key empty; list models may fail." >&2
+      [[ "$custom_choice" == "6" && -z "$base_url" ]] && echo "  Warning: Base URL empty; list models may fail." >&2
       ;;
     *) backend="lmstudio"; base_url="${LMSTUDIO_URL}"; api_key="" ;;
   esac
