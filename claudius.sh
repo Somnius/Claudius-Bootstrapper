@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
-# Claudius v0.8.3 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, custom API).
+# Claudius v0.9.0 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, Custom, NewAPI).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context (where applicable), update config, run claude.
 # Supports: bash, zsh, fish, ksh, sh. Platforms: Linux, macOS, Windows (Git Bash/WSL).
 
 set -euo pipefail
 
-VERSION="0.8.3"
+VERSION="0.9.0"
 
 # --help function: Display usage information
 print_help() {
   cat << 'EOF'
 Usage: claudius [OPTIONS]
 
-Claudius v0.8.3 - Claude Code multi-backend bootstrapper
+Claudius v0.9.0 - Claude Code multi-backend bootstrapper
 
-Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, OpenRouter, or a custom
-OpenAI-compatible API. Custom option includes presets: Alibaba (DashScope), Kimi (Moonshot), DeepSeek,
-Groq, OpenRouter, or Other (enter URL + key). Writes env vars to your shell config (bash/zsh/fish/ksh/sh).
+Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, OpenRouter, Custom (many presets),
+or NewAPI (QuantumNous unified gateway). Custom presets: Alibaba, Kimi, DeepSeek, Groq, OpenRouter, xAI,
+OpenAI, or Other. NewAPI: self-host or cloud; chat at base/v1, list models at base/api/models.
+Writes env vars to your shell config (bash/zsh/fish/ksh/sh).
 
 Options:
   --help, -h    Show this help message and exit
@@ -107,7 +108,7 @@ get_shell_config_file() {
 
 # --- Append Claude Code env block to the correct config file with correct syntax ---
 # Args: shell, base_url, auth_token, api_key, backend
-# For openrouter|custom only ANTHROPIC_API_KEY; for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN (avoids Claude "auth conflict").
+# For openrouter|custom|newapi only ANTHROPIC_API_KEY; for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN (avoids Claude "auth conflict").
 update_shell_exports() {
   local shell="${1:-bash}" base_url="$2" auth_token="${3:-}" api_key="${4:-}" backend="${5:-lmstudio}"
   local config_file marker block
@@ -122,7 +123,7 @@ update_shell_exports() {
   if [[ "$shell" == "fish" ]]; then
     mkdir -p "${HOME}/.config/fish"
     case "$backend" in
-      openrouter|custom)
+      openrouter|custom|newapi)
         block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
 set -gx ANTHROPIC_API_KEY \"${api_key}\"
 set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
@@ -133,7 +134,7 @@ set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
     esac
   else
     case "$backend" in
-      openrouter|custom)
+      openrouter|custom|newapi)
         block="export ANTHROPIC_BASE_URL=\"${base_url}\"
 export ANTHROPIC_API_KEY=\"${api_key}\"
 export CLAUDE_CODE_ATTRIBUTION_HEADER=0" ;;
@@ -322,10 +323,11 @@ run_init() {
   echo "  1) LM Studio (local, default http://localhost:1234)"
   echo "  2) Ollama (local, default http://localhost:11434)"
   echo "  3) OpenRouter (cloud, requires API key)"
-  echo "  4) Custom (Alibaba, Kimi, DeepSeek, Groq, OpenRouter, or other — API key)"
+  echo "  4) Custom (Alibaba, Kimi, DeepSeek, Groq, OpenRouter, xAI, OpenAI, or other — API key)"
+  echo "  5) NewAPI (unified gateway — self‑host or cloud, https://github.com/QuantumNous/new-api)"
   echo ""
   local backend_choice backend="lmstudio" base_url="$LMSTUDIO_URL" api_key=""
-  read -rp "Choose (1-4) [1]: " backend_choice
+  read -rp "Choose (1-5) [1]: " backend_choice
   backend_choice="${backend_choice:-1}"
   case "$backend_choice" in
     1) backend="lmstudio"; base_url="${LMSTUDIO_URL}"; api_key="" ;;
@@ -336,6 +338,13 @@ run_init() {
       read -rp "OpenRouter API key: " api_key
       [[ -z "$api_key" ]] && echo "  Warning: API key empty; list models may fail." >&2
       ;;
+    5)
+      backend="newapi"
+      read -rp "NewAPI base URL (e.g. http://localhost:8080 or https://your-newapi-host): " base_url
+      base_url="${base_url:-http://localhost:8080}"
+      read -rp "NewAPI API key (Bearer token): " api_key
+      [[ -z "$api_key" ]] && echo "  Warning: API key empty; list models may fail." >&2
+      ;;
     4)
       backend="custom"
       echo "Choose custom provider (OpenAI-compatible API):"
@@ -344,10 +353,12 @@ run_init() {
       echo "  3) DeepSeek — api.deepseek.com"
       echo "  4) Groq — api.groq.com/openai/v1"
       echo "  5) OpenRouter — openrouter.ai (same as backend 3, alternative entry)"
-      echo "  6) Other — enter base URL and API key"
+      echo "  6) xAI (Grok) — api.x.ai"
+      echo "  7) OpenAI — api.openai.com"
+      echo "  8) Other — enter base URL and API key"
       echo ""
       local custom_choice
-      read -rp "Choose (1-6) [1]: " custom_choice
+      read -rp "Choose (1-8) [1]: " custom_choice
       custom_choice="${custom_choice:-1}"
       case "$custom_choice" in
         1) base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1" ;;
@@ -355,14 +366,16 @@ run_init() {
         3) base_url="https://api.deepseek.com/v1" ;;
         4) base_url="https://api.groq.com/openai/v1" ;;
         5) base_url="${OPENROUTER_URL}" ;;
-        6)
+        6) base_url="https://api.x.ai/v1" ;;
+        7) base_url="https://api.openai.com/v1" ;;
+        8)
           read -rp "Custom API base URL (e.g. https://api.example.com/v1): " base_url
           ;;
         *) base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1" ;;
       esac
       read -rp "API key: " api_key
       [[ -z "$api_key" ]] && echo "  Warning: API key empty; list models may fail." >&2
-      [[ "$custom_choice" == "6" && -z "$base_url" ]] && echo "  Warning: Base URL empty; list models may fail." >&2
+      [[ "$custom_choice" == "8" && -z "$base_url" ]] && echo "  Warning: Base URL empty; list models may fail." >&2
       ;;
     *) backend="lmstudio"; base_url="${LMSTUDIO_URL}"; api_key="" ;;
   esac
@@ -626,6 +639,7 @@ resolve_backend() {
       lmstudio) CURRENT_BASE_URL="${LMSTUDIO_URL}" ;;
       ollama)   CURRENT_BASE_URL="${OLLAMA_URL}" ;;
       openrouter) CURRENT_BASE_URL="${OPENROUTER_URL}" ;;
+      newapi)   ;;  # no default; user must set in prefs
       *)        CURRENT_BASE_URL="" ;;
     esac
   fi
@@ -1023,6 +1037,50 @@ except Exception:
   return 1
 }
 
+# --- NewAPI (QuantumNous unified gateway): GET /api/models, response data = { "channel_id": ["model1", ...] } ---
+# Chat uses base_url/v1/chat/completions; we store root base_url and use base_url/v1 for Claude Code.
+check_server_newapi() {
+  local base_url="$1" api_key="$2"
+  local url="${base_url%/}"
+  local code
+  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+    -H "Authorization: Bearer ${api_key}" "${url}/api/models" 2>/dev/null) || true
+  [[ "$code" == "200" ]]
+}
+
+fetch_models_newapi() {
+  local base_url="$1" api_key="$2"
+  local url="${base_url%/}"
+  local resp
+  resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+    -H "Authorization: Bearer ${api_key}" "${url}/api/models" 2>/dev/null) || true
+  if [[ -z "$resp" ]]; then
+    echo "Error: Could not reach NewAPI at ${base_url}. Check URL and API key." >&2
+    return 1
+  fi
+  if command -v jq &>/dev/null; then
+    if echo "$resp" | jq -e '.data | type == "object"' &>/dev/null; then
+      echo "$resp" | jq -r '.data | to_entries[] | .value[]? // empty | "\(.)|32768"'
+      return 0
+    fi
+  else
+    echo "$resp" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    data = d.get('data') or {}
+    for channel_models in data.values() if isinstance(data, dict) else []:
+        for m in channel_models if isinstance(channel_models, list) else []:
+            if m:
+                print(str(m) + '|32768')
+except Exception:
+    sys.exit(1)
+" 2>/dev/null && return 0
+  fi
+  echo "Error: Could not parse NewAPI model list. Response: ${resp:0:200}" >&2
+  return 1
+}
+
 # --- Unified: check server and fetch models by backend ---
 check_server_for_backend() {
   case "$CURRENT_BACKEND" in
@@ -1030,6 +1088,7 @@ check_server_for_backend() {
     ollama)    check_server_ollama "$CURRENT_BASE_URL" ;;
     openrouter) check_server_openrouter "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
     custom)    check_server_custom "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
+    newapi)    check_server_newapi "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
     *)         check_server_lmstudio "$CURRENT_BASE_URL" ;;
   esac
 }
@@ -1040,6 +1099,7 @@ fetch_models_for_backend() {
     ollama)    fetch_models_ollama "$CURRENT_BASE_URL" ;;
     openrouter) fetch_models_openrouter "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
     custom)    fetch_models_custom "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
+    newapi)    fetch_models_newapi "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
     *)         fetch_models_lmstudio "$CURRENT_BASE_URL" ;;
   esac
 }
@@ -1379,7 +1439,7 @@ write_settings() {
   local tmp
   tmp=$(mktemp)
   case "$backend" in
-    openrouter|custom)
+    openrouter|custom|newapi)
       if command -v jq &>/dev/null; then
         jq -n \
           --arg schema "$schema" \
@@ -1444,7 +1504,7 @@ verify_and_export() {
   export ANTHROPIC_BASE_URL="$base_url"
   export CLAUDE_CODE_ATTRIBUTION_HEADER="0"
   case "$backend" in
-    openrouter|custom)
+    openrouter|custom|newapi)
       unset -v ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
       export ANTHROPIC_API_KEY="$api_key"
       ;;
@@ -1472,7 +1532,7 @@ verify_and_export() {
   echo "Verified:"
   echo "  ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"
   case "$backend" in
-    openrouter|custom) echo "  ANTHROPIC_API_KEY=<set>" ;;
+    openrouter|custom|newapi) echo "  ANTHROPIC_API_KEY=<set>" ;;
     *) echo "  ANTHROPIC_AUTH_TOKEN=<set>" ;;
   esac
   echo "  defaultModel (for this run)= $model_id"
@@ -1594,12 +1654,16 @@ main() {
     echo "  Using model: $model_id (no load step for $CURRENT_BACKEND)."
   fi
 
+  local effective_base="$CURRENT_BASE_URL"
+  if [[ "$CURRENT_BACKEND" == "newapi" ]]; then
+    effective_base="${CURRENT_BASE_URL%/}/v1"
+  fi
   echo "Writing config..."
-  write_settings "$model_id" "$CURRENT_BASE_URL" "$CURRENT_AUTH" "$CURRENT_API_KEY" "$CURRENT_BACKEND"
+  write_settings "$model_id" "$effective_base" "$CURRENT_AUTH" "$CURRENT_API_KEY" "$CURRENT_BACKEND"
   local current_shell
   current_shell=$(get_current_shell)
-  update_shell_exports "$current_shell" "$CURRENT_BASE_URL" "$CURRENT_AUTH" "$CURRENT_API_KEY" "$CURRENT_BACKEND"
-  verify_and_export "$model_id" "$CURRENT_BASE_URL" "$CURRENT_AUTH" "$CURRENT_API_KEY" "$CURRENT_BACKEND"
+  update_shell_exports "$current_shell" "$effective_base" "$CURRENT_AUTH" "$CURRENT_API_KEY" "$CURRENT_BACKEND"
+  verify_and_export "$model_id" "$effective_base" "$CURRENT_AUTH" "$CURRENT_API_KEY" "$CURRENT_BACKEND"
 
   print_post_setup_instructions
 
