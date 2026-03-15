@@ -29,6 +29,7 @@ Claudius lets you choose a backend, pick a model, and run Claude Code against it
 | **`--purge`** | Interactive menu to purge saved session data. Settings and Claudius prefs are never removed. |
 | **`--dry-run` / `--test`** | Run server check and model selection without writing config or starting Claude. |
 | **`--by-pass-start`** | Run full setup (model, config write) but do not ask to start Claude Code; exit after writing config (for use in scripts). |
+| **`--last`** | Use last base URL, model, and context length; skip model menu and start Claude Code. Run `claudius` once to save a “last” choice. |
 
 ---
 
@@ -99,6 +100,14 @@ claudius --init
 
 Re-asks: show reply duration, keep session history on exit, and **which backend** (1–5). Saves to `~/.claude/claudius-prefs.json`.  
 If the script reported missing dependencies (required commands or backend app), install them, then run `claudius --init` to continue.
+
+### Use last model and context (`--last`)
+
+```bash
+claudius --last
+```
+
+Uses the last base URL (backend), model, and context length from your previous run. Skips the model and context menus and starts Claude Code. If you have never run `claudius` to completion, the script reports "No last model saved" and exits. Combines with `--by-pass-start` to write config only: `claudius --last --by-pass-start`.
 
 ### Bypass start prompt (for scripts)
 
@@ -171,7 +180,7 @@ Then `source ~/.bashrc` or open a new shell. For **zsh**, **fish**, **ksh**, and
 | What          | Where                     |
 |---------------|----------------------------|
 | Base URL, auth, default model | `~/.claude/settings.json`  |
-| Claudius prefs (backend, baseUrl, apiKey, turn duration, keep session) | `~/.claude/claudius-prefs.json` (first run or `claudius --init`) |
+| Claudius prefs (backend, baseUrl, apiKey, lastModel, lastContextLength, turn duration, keep session) | `~/.claude/claudius-prefs.json` (first run or `claudius --init`; last model/context saved for `--last`) |
 | Claude Code session data (purge with `claudius --purge`) | `~/.claude/projects`, `debug`, `file-history`, `history.jsonl`, etc. |
 | Shell exports | **Auto-appended** to the right file for your shell (see [SHELL-SETUP.md](SHELL-SETUP.md)): `.bashrc`, `.zshrc`, `~/.config/fish/config.fish`, `.kshrc`/`.profile` |
 | Default model | `defaultModel` in settings |
@@ -180,6 +189,7 @@ Then `source ~/.bashrc` or open a new shell. For **zsh**, **fish**, **ksh**, and
 
 ## Changelog
 
+- **0.9.3** (2026-03-15) – **`--last`:** Use last base URL, model, and context length; skip model menu and start Claude Code. The script saves `lastModel` and `lastContextLength` to `claudius-prefs.json` after each run. Run `claudius` once to set a "last" choice, then `claudius --last` to resume without menus. For LM Studio, if the same model is already loaded with the same context, load is skipped.
 - **0.9.2** (2026-03-15) – **Claude Code CLI and shell setup:** Script ensures Claude Code CLI is installed (offers install when missing, including on first run). After writing config, it appends `~/.local/bin` to your shell’s PATH (so `claude` works in new terminals) and the **claudius** alias to your shell config if not already present. First-run and main flow both offer "Install Claude Code now?" when the CLI is missing.
 - **0.9.1** (2026-03-15) – **`--by-pass-start`:** Do not ask to start Claude Code after setup; exit once config is written. Use with `claudius --by-pass-start` or `claudius --init --by-pass-start` to integrate the bootstrapper into other scripts.
 - **0.9.0** (2026-03-15) – **NewAPI backend and more Custom presets.** **NewAPI:** New backend option 5 — [QuantumNous new-api](https://github.com/QuantumNous/new-api) unified gateway. Enter root URL (e.g. `http://localhost:8080`) and API key; script lists models via `GET /api/models` (channel→models), writes Claude Code base as `url/v1`. **Custom presets:** Added **xAI (Grok)** (`api.x.ai/v1`) and **OpenAI** (`api.openai.com/v1`); menu now 1–8 (Alibaba, Kimi, DeepSeek, Groq, OpenRouter, xAI, OpenAI, Other). Env/auth: NewAPI uses API key only (no auth conflict).

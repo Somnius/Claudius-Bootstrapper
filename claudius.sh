@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Claudius v0.9.2 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, Custom, NewAPI).
+# Claudius v0.9.3 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, Custom, NewAPI).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context (where applicable), update config, run claude.
 # Supports: bash, zsh, fish, ksh, sh. Platforms: Linux, macOS, Windows (Git Bash/WSL).
 
 set -euo pipefail
 
-VERSION="0.9.2"
+VERSION="0.9.3"
 
 # --help function: Display usage information
 print_help() {
   cat << 'EOF'
 Usage: claudius [OPTIONS]
 
-Claudius v0.9.2 - Claude Code multi-backend bootstrapper
+Claudius v0.9.3 - Claude Code multi-backend bootstrapper
 
 Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, OpenRouter, Custom (many presets),
 or NewAPI (QuantumNous unified gateway). Custom presets: Alibaba, Kimi, DeepSeek, Groq, OpenRouter, xAI,
@@ -27,6 +27,7 @@ Options:
   --dry-run     Test flow without writing config or starting Claude
   --test        Alias for --dry-run
   --by-pass-start  Do not ask to start Claude Code after setup; exit once config is written (for use in scripts)
+  --last           Use last base URL, model, and context length; skip model menu and start Claude Code
 
 Environment Variables:
   CLAUDIUS_BACKEND   Backend: lmstudio | ollama | openrouter | custom
@@ -41,6 +42,7 @@ Examples:
   claudius --init                   # Reset preferences and re-choose backend
   claudius --init --by-pass-start   # Re-choose backend and model, write config, then exit (no start prompt)
   claudius --purge                  # Clear session data interactively
+  claudius --last                   # Use last model and context; start Claude without menus
   CLAUDIUS_BACKEND=ollama claudius  # Use Ollama (if already configured)
 
 For more info: https://github.com/Somnius/Claudius-Bootstrapper
@@ -382,6 +384,23 @@ with open('$CLAUDIUS_PREFS') as f: d = json.load(f)
 d['backend'] = '$backend'
 d['baseUrl'] = '$base_url'
 d['apiKey'] = '$api_key'
+with open('$CLAUDIUS_PREFS','w') as f: json.dump(d, f, indent=2)
+" 2>/dev/null || true
+  fi
+}
+
+# --- Save last selected model and context length to prefs (for --last) ---
+save_last_model_prefs() {
+  local model_id="$1" context_length="${2:-32768}"
+  [[ ! -f "$CLAUDIUS_PREFS" ]] && return 0
+  if command -v jq &>/dev/null; then
+    jq --arg m "$model_id" --argjson c "$context_length" '.lastModel = $m | .lastContextLength = $c' "$CLAUDIUS_PREFS" > "${CLAUDIUS_PREFS}.tmp" && mv "${CLAUDIUS_PREFS}.tmp" "$CLAUDIUS_PREFS"
+  else
+    python3 -c "
+import json
+with open('$CLAUDIUS_PREFS') as f: d = json.load(f)
+d['lastModel'] = '$model_id'
+d['lastContextLength'] = $context_length
 with open('$CLAUDIUS_PREFS','w') as f: json.dump(d, f, indent=2)
 " 2>/dev/null || true
   fi
@@ -1636,10 +1655,13 @@ print_post_setup_instructions() {
 
 # --- Main ---
 main() {
-  local dry_run=0 bypass_start=0
+  local dry_run=0 bypass_start=0 last_mode=0
   [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && print_help && exit 0
 
-  for a in "$@"; do [[ "$a" == "--by-pass-start" ]] && bypass_start=1 && break; done
+  for a in "$@"; do
+    [[ "$a" == "--by-pass-start" ]] && bypass_start=1
+    [[ "$a" == "--last" ]] && last_mode=1
+  done
 
   [[ "${1:-}" == "--dry-run" || "${1:-}" == "--test" ]] && dry_run=1 && shift
 
@@ -1690,38 +1712,63 @@ main() {
     wait_for_server
   done
 
-  local model_line model_id max_ctx
-  model_line=$(select_model) || exit 1
-  model_id="${model_line%%|*}"
-  max_ctx="${model_line##*|}"
-  echo ""
-  echo "Selected: $model_id (max $max_ctx tokens)"
-  echo ""
-
-  local context_length skip_load=0
+  local model_id max_ctx context_length skip_load=0
   local api_base="${CURRENT_BASE_URL}/api/v1"
-  if [[ "$CURRENT_BACKEND" == "lmstudio" ]]; then
-    local loaded_line loaded_key current_ctx
-    loaded_line=$(get_loaded_lmstudio_model "$api_base" 2>/dev/null) || true
-    if [[ -n "$loaded_line" ]]; then
-      loaded_key="${loaded_line%%|*}"
-      current_ctx="${loaded_line##*|}"
-      if [[ "$loaded_key" == "$model_id" ]]; then
-        context_length=$(select_context_length "$model_id" "$max_ctx" "$current_ctx") || exit 1
-        if [[ "$context_length" == "$current_ctx" ]]; then
+
+  if [[ "$last_mode" -eq 1 ]]; then
+    model_id=$(get_pref "lastModel")
+    context_length=$(get_pref "lastContextLength")
+    [[ -z "$context_length" || ! "$context_length" =~ ^[0-9]+$ ]] && context_length=32768
+    if [[ -z "$model_id" ]]; then
+      echo "No last model saved. Run claudius once to select a model."
+      exit 1
+    fi
+    max_ctx="$context_length"
+    echo ""
+    echo "Using last: $model_id (context length $context_length)"
+    echo ""
+    if [[ "$CURRENT_BACKEND" == "lmstudio" ]]; then
+      local loaded_line loaded_key current_ctx
+      loaded_line=$(get_loaded_lmstudio_model "$api_base" 2>/dev/null) || true
+      if [[ -n "$loaded_line" ]]; then
+        loaded_key="${loaded_line%%|*}"
+        current_ctx="${loaded_line##*|}"
+        if [[ "$loaded_key" == "$model_id" && "$current_ctx" == "$context_length" ]]; then
           skip_load=1
+        fi
+      fi
+    fi
+  else
+    local model_line
+    model_line=$(select_model) || exit 1
+    model_id="${model_line%%|*}"
+    max_ctx="${model_line##*|}"
+    echo ""
+    echo "Selected: $model_id (max $max_ctx tokens)"
+    echo ""
+    if [[ "$CURRENT_BACKEND" == "lmstudio" ]]; then
+      local loaded_line loaded_key current_ctx
+      loaded_line=$(get_loaded_lmstudio_model "$api_base" 2>/dev/null) || true
+      if [[ -n "$loaded_line" ]]; then
+        loaded_key="${loaded_line%%|*}"
+        current_ctx="${loaded_line##*|}"
+        if [[ "$loaded_key" == "$model_id" ]]; then
+          context_length=$(select_context_length "$model_id" "$max_ctx" "$current_ctx") || exit 1
+          if [[ "$context_length" == "$current_ctx" ]]; then
+            skip_load=1
+          fi
+        else
+          context_length=$(select_context_length "$model_id" "$max_ctx") || exit 1
         fi
       else
         context_length=$(select_context_length "$model_id" "$max_ctx") || exit 1
       fi
+      echo ""
+      echo "Context length: $context_length"
+      echo ""
     else
-      context_length=$(select_context_length "$model_id" "$max_ctx") || exit 1
+      context_length="$max_ctx"
     fi
-    echo ""
-    echo "Context length: $context_length"
-    echo ""
-  else
-    context_length="$max_ctx"
   fi
 
   if [[ "$dry_run" -eq 1 ]]; then
@@ -1750,6 +1797,7 @@ main() {
   if [[ "$CURRENT_BACKEND" == "newapi" ]]; then
     effective_base="${CURRENT_BASE_URL%/}/v1"
   fi
+  save_last_model_prefs "$model_id" "$context_length"
   echo "Writing config..."
   write_settings "$model_id" "$effective_base" "$CURRENT_AUTH" "$CURRENT_API_KEY" "$CURRENT_BACKEND"
   local current_shell
@@ -1767,8 +1815,10 @@ main() {
   fi
 
   local start_now="y"
-  read -rp "Start Claude Code in this terminal now? [Y/n]: " start_now
-  start_now="${start_now:-y}"
+  if [[ "$last_mode" -eq 0 ]]; then
+    read -rp "Start Claude Code in this terminal now? [Y/n]: " start_now
+    start_now="${start_now:-y}"
+  fi
   if [[ "${start_now,,}" != "n" && "${start_now,,}" != "no" ]]; then
     # Prefer ~/.local/bin (official Claude Code install location) so we see it even if PATH was not loaded in this session
     [[ -d "${HOME}/.local/bin" ]] && export PATH="${HOME}/.local/bin:${PATH}"
