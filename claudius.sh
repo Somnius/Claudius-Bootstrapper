@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Claudius v0.8.0 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, custom API).
+# Claudius v0.8.1 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, custom API).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context (where applicable), update config, run claude.
 # Supports: bash, zsh, fish, ksh, sh. Platforms: Linux, macOS, Windows (Git Bash/WSL).
 
 set -euo pipefail
 
-VERSION="0.8.0"
+VERSION="0.8.1"
 
 # --help function: Display usage information
 print_help() {
   cat << 'EOF'
 Usage: claudius [OPTIONS]
 
-Claudius v0.8.0 - Claude Code multi-backend bootstrapper
+Claudius v0.8.1 - Claude Code multi-backend bootstrapper
 
 Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, OpenRouter, or a custom
 OpenAI-compatible API (e.g. Alibaba Cloud). Writes env vars to your shell config (bash/zsh/fish/ksh/sh).
