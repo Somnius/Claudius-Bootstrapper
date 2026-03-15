@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Claudius v0.9.1 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, Custom, NewAPI).
+# Claudius v0.9.2 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, Custom, NewAPI).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context (where applicable), update config, run claude.
 # Supports: bash, zsh, fish, ksh, sh. Platforms: Linux, macOS, Windows (Git Bash/WSL).
 
 set -euo pipefail
 
-VERSION="0.9.1"
+VERSION="0.9.2"
 
 # --help function: Display usage information
 print_help() {
   cat << 'EOF'
 Usage: claudius [OPTIONS]
 
-Claudius v0.9.1 - Claude Code multi-backend bootstrapper
+Claudius v0.9.2 - Claude Code multi-backend bootstrapper
 
 Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, OpenRouter, Custom (many presets),
 or NewAPI (QuantumNous unified gateway). Custom presets: Alibaba, Kimi, DeepSeek, Groq, OpenRouter, xAI,
@@ -108,6 +108,57 @@ get_shell_config_file() {
   esac
 }
 
+# --- Absolute path to this script (for alias) ---
+get_claudius_script_path() {
+  local dir
+  dir=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)
+  echo "${dir}/$(basename "${BASH_SOURCE[0]:-$0}")"
+}
+
+# --- Ensure ~/.local/bin is in shell config so 'claude' is in PATH in new terminals ---
+ensure_path_for_claude_in_shell_config() {
+  local shell="${1:-bash}" config_file
+  config_file=$(get_shell_config_file "$shell")
+  [[ -d "${HOME}/.local/bin" ]] || return 0
+  if [[ -f "$config_file" ]] && grep -q '\.local/bin' "$config_file" 2>/dev/null; then
+    return 0
+  fi
+  local marker="# Claudius: ensure Claude Code CLI (claude) in PATH"
+  if [[ "$shell" == "fish" ]]; then
+    mkdir -p "${HOME}/.config/fish"
+    echo "" >> "$config_file"
+    echo "$marker" >> "$config_file"
+    echo 'set -gx PATH "$HOME/.local/bin" $PATH' >> "$config_file"
+  else
+    echo "" >> "$config_file"
+    echo "$marker" >> "$config_file"
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$config_file"
+  fi
+  echo "  Appended ~/.local/bin to PATH in $config_file (for Claude Code CLI)."
+}
+
+# --- Ensure claudius alias is in shell config so 'claudius' works in new terminals ---
+ensure_claudius_alias_in_shell_config() {
+  local shell="${1:-bash}" config_file script_path
+  config_file=$(get_shell_config_file "$shell")
+  script_path=$(get_claudius_script_path)
+  if [[ -f "$config_file" ]] && grep -qE 'alias claudius|function claudius' "$config_file" 2>/dev/null; then
+    return 0
+  fi
+  local marker="# Claudius bootstrapper alias (run: claudius)"
+  if [[ "$shell" == "fish" ]]; then
+    mkdir -p "${HOME}/.config/fish"
+    echo "" >> "$config_file"
+    echo "$marker" >> "$config_file"
+    echo "function claudius; $script_path \$argv; end" >> "$config_file"
+  else
+    echo "" >> "$config_file"
+    echo "$marker" >> "$config_file"
+    echo "alias claudius='$script_path'" >> "$config_file"
+  fi
+  echo "  Appended claudius alias to $config_file."
+}
+
 # --- Append Claude Code env block to the correct config file with correct syntax ---
 # Args: shell, base_url, auth_token, api_key, backend
 # For openrouter|custom|newapi only ANTHROPIC_API_KEY; for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN (avoids Claude "auth conflict").
@@ -198,11 +249,36 @@ try_install_claude_code() {
   export PATH="${HOME}/.local/bin:${PATH}"
   if command -v claude &>/dev/null; then
     echo "  Claude Code installed. Run 'claude --version' to confirm."
+    ensure_path_for_claude_in_shell_config "$(get_current_shell)"
     return 0
   fi
-  echo "  Install may have completed. Ensure ~/.local/bin is in your PATH:"
-  echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
-  echo "  Then run claudius again, or start Claude Code with: claude --model <model-id>"
+  echo "  Install may have completed. Ensuring ~/.local/bin in your shell config..."
+  ensure_path_for_claude_in_shell_config "$(get_current_shell)"
+  echo "  Reload your shell (source config file) or open a new terminal, then run claudius again."
+  return 1
+}
+
+# --- Ensure Claude Code CLI is installed; offer install if missing; persist PATH/alias in shell config ---
+# Returns 0 if claude is available (now or after install), 1 otherwise.
+ensure_claude_installed() {
+  [[ -d "${HOME}/.local/bin" ]] && export PATH="${HOME}/.local/bin:${PATH}"
+  if command -v claude &>/dev/null; then
+    return 0
+  fi
+  echo "Claude Code CLI (claude) is not installed or not in your PATH."
+  echo ""
+  local install_choice="y"
+  read -rp "Install Claude Code now? [Y/n]: " install_choice
+  install_choice="${install_choice:-y}"
+  if [[ "${install_choice,,}" != "n" && "${install_choice,,}" != "no" ]]; then
+    if try_install_claude_code; then
+      return 0
+    fi
+  fi
+  local cfg
+  cfg=$(get_shell_config_file "$(get_current_shell)")
+  ensure_path_for_claude_in_shell_config "$(get_current_shell)"
+  echo "  Then run: source $cfg  or open a new terminal, and run claudius again."
   return 1
 }
 
@@ -219,6 +295,13 @@ check_required_commands() {
 
   if [[ ${#missing[@]} -eq 0 ]]; then
     return 0
+  fi
+
+  # If only claude is missing, offer to install it
+  if [[ ${#missing[@]} -eq 1 && "${missing[0]}" == *"claude"* ]]; then
+    if ensure_claude_installed; then
+      return 0
+    fi
   fi
 
   echo "Missing required command(s): ${missing[*]}"
@@ -1591,6 +1674,11 @@ main() {
 
   resolve_backend
 
+  if [[ "$dry_run" -eq 0 ]] && ! ensure_claude_installed; then
+    echo "Claude Code CLI is required. Install it, then run claudius again."
+    exit 1
+  fi
+
   local platform
   platform=$(detect_platform)
   echo "Claudius v${VERSION} - Claude Code multi-backend (${CURRENT_BACKEND})"
@@ -1667,6 +1755,8 @@ main() {
   local current_shell
   current_shell=$(get_current_shell)
   update_shell_exports "$current_shell" "$effective_base" "$CURRENT_AUTH" "$CURRENT_API_KEY" "$CURRENT_BACKEND"
+  ensure_path_for_claude_in_shell_config "$current_shell"
+  ensure_claudius_alias_in_shell_config "$current_shell"
   verify_and_export "$model_id" "$effective_base" "$CURRENT_AUTH" "$CURRENT_API_KEY" "$CURRENT_BACKEND"
 
   print_post_setup_instructions
