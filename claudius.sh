@@ -1416,6 +1416,15 @@ main() {
   read -rp "Start Claude Code in this terminal now? [Y/n]: " start_now
   start_now="${start_now:-y}"
   if [[ "${start_now,,}" != "n" && "${start_now,,}" != "no" ]]; then
+    if ! command -v claude &>/dev/null; then
+      echo ""
+      echo "Claude Code CLI (claude) is not installed or not in your PATH."
+      echo "  Install from: https://code.claude.com/docs"
+      echo "  Then run: claude --model $model_id"
+      echo "  Your config is already in ~/.claude/settings.json; you can also use VS Code / Cursor with the same env vars."
+      echo ""
+      exit 1
+    fi
     echo "Starting Claude Code..."
     echo ""
     local keep_sess
