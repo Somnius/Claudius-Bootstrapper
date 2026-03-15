@@ -195,6 +195,8 @@ try_install_claude_code() {
 # Check required commands (curl; jq or python3; claude). Returns 0 if all ok, 1 otherwise. Prints install hints.
 check_required_commands() {
   local missing=()
+  # Prefer ~/.local/bin so we detect Claude Code if installed there but not yet in PATH (e.g. fresh install, IDE shell)
+  [[ -d "${HOME}/.local/bin" ]] && export PATH="${HOME}/.local/bin:${PATH}"
   command -v curl &>/dev/null || missing+=("curl")
   if ! command -v jq &>/dev/null && ! command -v python3 &>/dev/null; then
     missing+=("jq or python3 (at least one for JSON)")
@@ -1531,6 +1533,8 @@ main() {
   read -rp "Start Claude Code in this terminal now? [Y/n]: " start_now
   start_now="${start_now:-y}"
   if [[ "${start_now,,}" != "n" && "${start_now,,}" != "no" ]]; then
+    # Prefer ~/.local/bin (official Claude Code install location) so we see it even if PATH was not loaded in this session
+    [[ -d "${HOME}/.local/bin" ]] && export PATH="${HOME}/.local/bin:${PATH}"
     if ! command -v claude &>/dev/null; then
       echo ""
       echo "Claude Code CLI (claude) is not installed or not in your PATH."
