@@ -21,10 +21,10 @@ Claudius lets you choose a backend, pick a model, and run Claude Code against it
 | **Platform & deps** | Detects Linux/macOS/Windows and prints install hints for curl, jq, claude (e.g. apt/dnf/pacman on Linux, brew on macOS). Does not auto-install packages. |
 | **Server check** | Verifies backend is reachable; for LM Studio/Ollama offers Resume / Start local server / **Remote** (connect to another machine: enter IP:port and backend type) / Abort; for OpenRouter/Custom offers Retry / Abort. |
 | **Model list** | Fetches models from the chosen backend (LM Studio native API, Ollama `/api/tags`, OpenRouter/Custom `GET /models` with Bearer). Numbered menu to pick one. |
-| **Context length** | **LM Studio only:** pick context size, then script unloads current model and loads the selected one with that length (spinner). Ollama/OpenRouter/Custom: no load step; model is used as-is. |
+| **Context length** | **LM Studio only:** if the selected model is already loaded, script shows current context and offers keep or change (5+1 options); if you keep it, no reload. Otherwise pick context size and script loads the model (unloads any other first). Ollama/OpenRouter/Custom: no load step. |
 | **Memory check** | **LM Studio only:** checks RAM/VRAM before load and warns if insufficient. |
 | **Config & shell** | Writes `~/.claude/settings.json` (base URL, auth, defaultModel) and appends ANTHROPIC_* exports to the **correct config file** for your shell (bash/zsh/fish/ksh/sh) with the right syntax (e.g. `set -gx` for fish). |
-| **Post-setup** | Prints instructions: use Claude in this terminal, or in VS Code/Cursor/Forks with the same env vars. Asks “Start Claude Code now? [Y/n]”. |
+| **Post-setup** | Prints instructions and asks to start Claude Code. If the CLI is missing, offers **Install Claude Code now?** (official script on Linux/macOS) “Start Claude Code now? [Y/n]”. |
 | **Session on exit** | If you chose not to keep session history, after Claude Code exits you get a menu: delete current session, purge all (2 confirmations), or purge by age. |
 | **`--purge`** | Interactive menu to purge saved session data. Settings and Claudius prefs are never removed. |
 | **`--dry-run` / `--test`** | Run server check and model selection without writing config or starting Claude. |
@@ -58,7 +58,7 @@ You need **Claude Code** (the CLI) and at least one **backend**. The script will
 
 ### 1. Install Claude Code
 
-Go to **[code.claude.com/docs](https://code.claude.com/docs)** and follow the install instructions for your platform. Confirm with: `claude --version`.
+Go to **[code.claude.com/docs](https://code.claude.com/docs)** and follow the install instructions for your platform. Confirm with: `claude --version`. If you run Claudius without the CLI installed, it will offer **Install Claude Code now?** and run the official install script (Linux/macOS; works on Debian, Ubuntu, and most distros).
 
 ### 2. Install a backend (pick one or more)
 
@@ -212,7 +212,7 @@ Optional local docs (gitignored, not in the repo by default): `GUIDE-VSCODE-CLAU
 - **No models** – LM Studio: load at least one model and ensure the server is running. Ollama: run `ollama pull <name>` and ensure `ollama serve` is running. OpenRouter/Custom: check API key and base URL; the provider’s `GET .../models` must return a list.
 - **Model load failed (HTTP 500)** – LM Studio could not load the model (e.g. out of memory, corrupt file, unsupported config). The script unloads any previously loaded model before loading; if it still fails, check **LM Studio server logs** for the exact error, try a smaller context length or another model. The script no longer continues to start Claude when load fails.
 - **`claudius` not found** – Run `source ~/.bashrc` or open a new terminal.
-- **`claude: not found` when starting** – The Claude Code CLI is not installed or not in PATH. Install from [code.claude.com/docs](https://code.claude.com/docs), then run `claude --model <your-model-id>`. Your config in `~/.claude/settings.json` is already set; you can also use the Claude Code extension in VS Code/Cursor with the same env vars.
+- **`claude: not found` when starting** – The script will offer **Install Claude Code now? [y/N]**; say yes to run the official install script (Linux/macOS; works on Debian, Ubuntu, and most distros). It installs to `~/.local/bin`—ensure that directory is in your PATH (`export PATH="$HOME/.local/bin:$PATH"` and add to your shell config). Alternatively install from [code.claude.com/docs](https://code.claude.com/docs). Your config in `~/.claude/settings.json` is already set; you can also use the Claude Code extension in VS Code/Cursor with the same env vars.
 - **Slow or no response** – Curl uses a 10s timeout (`CURL_TIMEOUT`); load can take up to 300s. Use `claudius --dry-run` to test.
 - **Cursor (or VS Code) opens extra windows when starting Claude Code** – This comes from **Claude Code’s IDE integration**, not from Claudius. When the Claude Code extension is installed, starting the CLI (e.g. via `claudius`) can trigger the IDE to open panels or new windows. **Workaround:** run `claudius` from a terminal **outside** Cursor (e.g. a standalone terminal like GNOME Terminal, kitty, Alacritty). Alternatively, disable the Claude Code extension in Cursor when you only want terminal-only use. See [anthropics/claude-code#18205](https://github.com/anthropics/claude-code/issues/18205), [#8768](https://github.com/anthropics/claude-code/issues/8768).
 - **Base URL** – LM Studio: use `http://localhost:1234` with no trailing `/v1`; the script does this. For custom backends, use the provider’s full base URL (e.g. Alibaba compatible-mode URL).

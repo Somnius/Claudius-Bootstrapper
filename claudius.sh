@@ -167,6 +167,31 @@ check_ollama_installed() {
   return 1
 }
 
+# --- Try to install Claude Code CLI (Linux/macOS via official install script) ---
+# Returns 0 if claude is in PATH after attempt, 1 otherwise. Adds ~/.local/bin to PATH for session.
+try_install_claude_code() {
+  local plat
+  plat=$(detect_platform)
+  if [[ "$plat" == "windows" ]]; then
+    echo "  On Windows, install Claude Code via WSL or see https://code.claude.com/docs"
+    return 1
+  fi
+  echo "  Running official install script (https://claude.ai/install.sh)..."
+  if ! curl -fsSL https://claude.ai/install.sh 2>/dev/null | bash 2>/dev/null; then
+    echo "  Install script failed or returned an error."
+    return 1
+  fi
+  export PATH="${HOME}/.local/bin:${PATH}"
+  if command -v claude &>/dev/null; then
+    echo "  Claude Code installed. Run 'claude --version' to confirm."
+    return 0
+  fi
+  echo "  Install may have completed. Ensure ~/.local/bin is in your PATH:"
+  echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+  echo "  Then run claudius again, or start Claude Code with: claude --model <model-id>"
+  return 1
+}
+
 # Check required commands (curl; jq or python3; claude). Returns 0 if all ok, 1 otherwise. Prints install hints.
 check_required_commands() {
   local missing=()
@@ -729,6 +754,38 @@ wait_for_server() {
   fi
 }
 
+# --- Get currently loaded model in LM Studio: output "model_key|context_length" or empty ---
+get_loaded_lmstudio_model() {
+  local api_base="${1:-$LMSTUDIO_API}"
+  local resp
+  resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" "${api_base}/models" 2>/dev/null) || true
+  [[ -z "$resp" ]] && return 1
+  if command -v jq &>/dev/null; then
+    local key ctx
+    key=$(echo "$resp" | jq -r '.models[] | select((.loaded_instances | length) > 0) | .key' 2>/dev/null | head -1)
+    [[ -z "$key" ]] && return 1
+    ctx=$(echo "$resp" | jq -r --arg k "$key" '.models[] | select(.key == $k) | .loaded_instances[0].config.context_length // .loaded_instances[0].context_length // .max_context_length // 32768' 2>/dev/null | head -1)
+    [[ -z "$ctx" ]] && ctx=32768
+    echo "${key}|${ctx}"
+    return 0
+  fi
+  python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    for m in d.get('models', []):
+        insts = m.get('loaded_instances') or []
+        if not insts: continue
+        key = m.get('key', '')
+        cfg = insts[0]
+        ctx = cfg.get('config', {}).get('context_length') or cfg.get('context_length') or m.get('max_context_length', 32768)
+        if key: print(key + '|' + str(ctx)); sys.exit(0)
+except Exception: pass
+sys.exit(1)
+" <<< "$resp" 2>/dev/null && return 0
+  return 1
+}
+
 # --- Unload any currently loaded model(s) in LM Studio (avoids load conflicts / HTTP 500) ---
 unload_loaded_models() {
   local api_base="${1:-$LMSTUDIO_API}"
@@ -993,9 +1050,11 @@ select_model() {
 }
 
 # --- Choose context length: 5 suggested values from min to max + custom ---
-# Args: model_key, max_context_length. Outputs chosen context_length (number).
+# Args: model_key, max_context_length. Optional third: current_ctx (when model already loaded).
+# When current_ctx is set, option 1 is "Keep current (current_ctx)"; no reload if chosen.
+# Outputs chosen context_length (number).
 select_context_length() {
-  local model_key="$1" max_ctx="$2"
+  local model_key="$1" max_ctx="$2" current_ctx="${3:-}"
   local min_ctx=2048
   [[ "$max_ctx" -lt "$min_ctx" ]] && min_ctx=1024
   if [[ "$max_ctx" -le "$min_ctx" ]]; then
@@ -1012,6 +1071,43 @@ select_context_length() {
   [[ "$v2" -lt "$min_ctx" ]] && v2=$min_ctx
   [[ "$v3" -gt "$max_ctx" ]] && v3=$max_ctx
   [[ "$v4" -gt "$max_ctx" ]] && v4=$max_ctx
+
+  if [[ -n "$current_ctx" ]]; then
+    echo "Model $model_key is already loaded with context length $current_ctx." >&2
+    echo "Change context or keep as is?" >&2
+    echo "" >&2
+    echo "  1) Keep current ($current_ctx)" >&2
+    echo "  2) $v1" >&2
+    echo "  3) $v2" >&2
+    echo "  4) $v3" >&2
+    echo "  5) $v4" >&2
+    echo "  6) $max_ctx" >&2
+    echo "  7) Custom (enter your own number)" >&2
+    echo "" >&2
+    local choice
+    while true; do
+      read -rp "Choose (1-7): " choice
+      case "$choice" in
+        1) echo "$current_ctx"; return 0 ;;
+        2) echo "$v1"; return 0 ;;
+        3) echo "$v2"; return 0 ;;
+        4) echo "$v3"; return 0 ;;
+        5) echo "$v4"; return 0 ;;
+        6) echo "$max_ctx"; return 0 ;;
+        7)
+          read -rp "Enter context length (${min_ctx}-${max_ctx}): " choice
+          if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge "$min_ctx" ]] && [[ "$choice" -le "$max_ctx" ]]; then
+            echo "$choice"
+            return 0
+          fi
+          echo "Enter a number between $min_ctx and $max_ctx." >&2
+          ;;
+        *)
+          echo "Invalid choice. Enter 1-7." >&2
+          ;;
+      esac
+    done
+  fi
 
   echo "Context length (tokens) for $model_key: min $min_ctx, max $max_ctx" >&2
   echo "" >&2
@@ -1374,9 +1470,25 @@ main() {
   echo "Selected: $model_id (max $max_ctx tokens)"
   echo ""
 
-  local context_length
+  local context_length skip_load=0
+  local api_base="${CURRENT_BASE_URL}/api/v1"
   if [[ "$CURRENT_BACKEND" == "lmstudio" ]]; then
-    context_length=$(select_context_length "$model_id" "$max_ctx") || exit 1
+    local loaded_line loaded_key current_ctx
+    loaded_line=$(get_loaded_lmstudio_model "$api_base" 2>/dev/null) || true
+    if [[ -n "$loaded_line" ]]; then
+      loaded_key="${loaded_line%%|*}"
+      current_ctx="${loaded_line##*|}"
+      if [[ "$loaded_key" == "$model_id" ]]; then
+        context_length=$(select_context_length "$model_id" "$max_ctx" "$current_ctx") || exit 1
+        if [[ "$context_length" == "$current_ctx" ]]; then
+          skip_load=1
+        fi
+      else
+        context_length=$(select_context_length "$model_id" "$max_ctx") || exit 1
+      fi
+    else
+      context_length=$(select_context_length "$model_id" "$max_ctx") || exit 1
+    fi
     echo ""
     echo "Context length: $context_length"
     echo ""
@@ -1390,14 +1502,17 @@ main() {
   fi
 
   if [[ "$CURRENT_BACKEND" == "lmstudio" ]]; then
-    check_memory_and_confirm "$model_id" "$context_length" || exit 1
-    echo "Loading model in LM Studio..."
-    local api_base="${CURRENT_BASE_URL}/api/v1"
-    if ! load_model_with_context "$model_id" "$context_length" "$api_base"; then
-      echo ""
-      echo "Model load failed. Check LM Studio server logs (e.g. out of memory, missing file)."
-      echo "Fix the issue and run claudius again, or choose another model/context length."
-      exit 1
+    if [[ "$skip_load" -eq 1 ]]; then
+      echo "  Using already-loaded model $model_id with context length $context_length (no reload)."
+    else
+      check_memory_and_confirm "$model_id" "$context_length" || exit 1
+      echo "Loading model in LM Studio..."
+      if ! load_model_with_context "$model_id" "$context_length" "$api_base"; then
+        echo ""
+        echo "Model load failed. Check LM Studio server logs (e.g. out of memory, missing file)."
+        echo "Fix the issue and run claudius again, or choose another model/context length."
+        exit 1
+      fi
     fi
   else
     echo "  Using model: $model_id (no load step for $CURRENT_BACKEND)."
@@ -1419,11 +1534,23 @@ main() {
     if ! command -v claude &>/dev/null; then
       echo ""
       echo "Claude Code CLI (claude) is not installed or not in your PATH."
-      echo "  Install from: https://code.claude.com/docs"
-      echo "  Then run: claude --model $model_id"
-      echo "  Your config is already in ~/.claude/settings.json; you can also use VS Code / Cursor with the same env vars."
       echo ""
-      exit 1
+      local install_choice="n"
+      read -rp "Install Claude Code now? [y/N]: " install_choice
+      install_choice="${install_choice:-n}"
+      if [[ "${install_choice,,}" == "y" || "${install_choice,,}" == "yes" ]]; then
+        if try_install_claude_code; then
+          : # claude is now in PATH, continue to start
+        else
+          exit 1
+        fi
+      else
+        echo "  Install from: https://code.claude.com/docs"
+        echo "  Then run: claude --model $model_id"
+        echo "  Your config is in ~/.claude/settings.json; you can also use VS Code / Cursor with the same env vars."
+        echo ""
+        exit 1
+      fi
     fi
     echo "Starting Claude Code..."
     echo ""
