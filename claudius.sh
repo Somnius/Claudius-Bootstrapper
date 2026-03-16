@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Claudius v0.9.3 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, Custom, NewAPI).
+# Claudius v0.9.4 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, Custom, NewAPI).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context (where applicable), update config, run claude.
 # Supports: bash, zsh, fish, ksh, sh. Platforms: Linux, macOS, Windows (Git Bash/WSL).
 
 set -euo pipefail
 
-VERSION="0.9.3"
+VERSION="0.9.4"
 
 # --help function: Display usage information
 print_help() {
   cat << 'EOF'
 Usage: claudius [OPTIONS]
 
-Claudius v0.9.3 - Claude Code multi-backend bootstrapper
+Claudius v0.9.4 - Claude Code multi-backend bootstrapper
 
 Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, OpenRouter, Custom (many presets),
-or NewAPI (QuantumNous unified gateway). Custom presets: Alibaba, Kimi, DeepSeek, Groq, OpenRouter, xAI,
-OpenAI, or Other. NewAPI: self-host or cloud; chat at base/v1, list models at base/api/models.
-Writes env vars to your shell config (bash/zsh/fish/ksh/sh).
+or NewAPI (QuantumNous unified gateway). Custom presets: Alibaba (/apps/anthropic or /compatible-mode/v1),
+Kimi, DeepSeek, Groq, OpenRouter, xAI, OpenAI, or Other. NewAPI: self-host or cloud; chat at base/v1,
+list models at base/api/models. Writes env vars to your shell config (bash/zsh/fish/ksh/sh).
 
 Options:
   --help, -h    Show this help message and exit
@@ -164,6 +164,7 @@ ensure_claudius_alias_in_shell_config() {
 # --- Append Claude Code env block to the correct config file with correct syntax ---
 # Args: shell, base_url, auth_token, api_key, backend
 # For openrouter|custom|newapi only ANTHROPIC_API_KEY; for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN (avoids Claude "auth conflict").
+# Exception: Alibaba /apps/anthropic uses ANTHROPIC_AUTH_TOKEN (like lmstudio/ollama).
 update_shell_exports() {
   local shell="${1:-bash}" base_url="$2" auth_token="${3:-}" api_key="${4:-}" backend="${5:-lmstudio}"
   local config_file marker block
@@ -175,29 +176,41 @@ update_shell_exports() {
     return 0
   fi
 
+  # Alibaba /apps/anthropic uses ANTHROPIC_AUTH_TOKEN instead of API_KEY
+  local use_auth_token=0
+  if [[ "$backend" == "custom" && "$base_url" == *"dashscope-intl.aliyuncs.com/apps/anthropic"* ]]; then
+    use_auth_token=1
+  fi
+
   if [[ "$shell" == "fish" ]]; then
     mkdir -p "${HOME}/.config/fish"
-    case "$backend" in
-      openrouter|custom|newapi)
-        block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
-set -gx ANTHROPIC_API_KEY \"${api_key}\"
-set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
-      *)
-        block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
+    if [[ $use_auth_token -eq 1 ]]; then
+      block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
 set -gx ANTHROPIC_AUTH_TOKEN \"${auth_token}\"
-set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
-    esac
+set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0"
+    elif [[ "$backend" == "openrouter" || "$backend" == "custom" || "$backend" == "newapi" ]]; then
+      block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
+set -gx ANTHROPIC_API_KEY \"${api_key}\"
+set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0"
+    else
+      block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
+set -gx ANTHROPIC_AUTH_TOKEN \"${auth_token}\"
+set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0"
+    fi
   else
-    case "$backend" in
-      openrouter|custom|newapi)
-        block="export ANTHROPIC_BASE_URL=\"${base_url}\"
-export ANTHROPIC_API_KEY=\"${api_key}\"
-export CLAUDE_CODE_ATTRIBUTION_HEADER=0" ;;
-      *)
-        block="export ANTHROPIC_BASE_URL=\"${base_url}\"
+    if [[ $use_auth_token -eq 1 ]]; then
+      block="export ANTHROPIC_BASE_URL=\"${base_url}\"
 export ANTHROPIC_AUTH_TOKEN=\"${auth_token}\"
-export CLAUDE_CODE_ATTRIBUTION_HEADER=0" ;;
-    esac
+export CLAUDE_CODE_ATTRIBUTION_HEADER=0"
+    elif [[ "$backend" == "openrouter" || "$backend" == "custom" || "$backend" == "newapi" ]]; then
+      block="export ANTHROPIC_BASE_URL=\"${base_url}\"
+export ANTHROPIC_API_KEY=\"${api_key}\"
+export CLAUDE_CODE_ATTRIBUTION_HEADER=0"
+    else
+      block="export ANTHROPIC_BASE_URL=\"${base_url}\"
+export ANTHROPIC_AUTH_TOKEN=\"${auth_token}\"
+export CLAUDE_CODE_ATTRIBUTION_HEADER=0"
+    fi
   fi
 
   echo "" >> "$config_file"
@@ -452,34 +465,36 @@ run_init() {
     4)
       backend="custom"
       echo "Choose custom provider (OpenAI-compatible API):"
-      echo "  1) Alibaba Cloud (DashScope) — Singapore: dashscope-intl.aliyuncs.com"
-      echo "  2) Kimi (Moonshot AI) — global: api.moonshot.ai"
-      echo "  3) DeepSeek — api.deepseek.com"
-      echo "  4) Groq — api.groq.com/openai/v1"
-      echo "  5) OpenRouter — openrouter.ai (same as backend 3, alternative entry)"
-      echo "  6) xAI (Grok) — api.x.ai"
-      echo "  7) OpenAI — api.openai.com"
-      echo "  8) Other — enter base URL and API key"
+      echo "  1) Alibaba Cloud (DashScope) — /apps/anthropic (Singapore, recommended)"
+      echo "  2) Alibaba Cloud (DashScope) — /compatible-mode/v1 (Singapore)"
+      echo "  3) Kimi (Moonshot AI) — global: api.moonshot.ai"
+      echo "  4) DeepSeek — api.deepseek.com"
+      echo "  5) Groq — api.groq.com/openai/v1"
+      echo "  6) OpenRouter — openrouter.ai (same as backend 3, alternative entry)"
+      echo "  7) xAI (Grok) — api.x.ai"
+      echo "  8) OpenAI — api.openai.com"
+      echo "  9) Other — enter base URL and API key"
       echo ""
       local custom_choice
-      read -rp "Choose (1-8) [1]: " custom_choice
+      read -rp "Choose (1-9) [1]: " custom_choice
       custom_choice="${custom_choice:-1}"
       case "$custom_choice" in
-        1) base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1" ;;
-        2) base_url="https://api.moonshot.ai/v1" ;;
-        3) base_url="https://api.deepseek.com/v1" ;;
-        4) base_url="https://api.groq.com/openai/v1" ;;
-        5) base_url="${OPENROUTER_URL}" ;;
-        6) base_url="https://api.x.ai/v1" ;;
-        7) base_url="https://api.openai.com/v1" ;;
-        8)
+        1) base_url="https://dashscope-intl.aliyuncs.com/apps/anthropic" ;;
+        2) base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1" ;;
+        3) base_url="https://api.moonshot.ai/v1" ;;
+        4) base_url="https://api.deepseek.com/v1" ;;
+        5) base_url="https://api.groq.com/openai/v1" ;;
+        6) base_url="${OPENROUTER_URL}" ;;
+        7) base_url="https://api.x.ai/v1" ;;
+        8) base_url="https://api.openai.com/v1" ;;
+        9)
           read -rp "Custom API base URL (e.g. https://api.example.com/v1): " base_url
           ;;
-        *) base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1" ;;
+        *) base_url="https://dashscope-intl.aliyuncs.com/apps/anthropic" ;;
       esac
       read -rp "API key: " api_key
       [[ -z "$api_key" ]] && echo "  Warning: API key empty; list models may fail." >&2
-      [[ "$custom_choice" == "8" && -z "$base_url" ]] && echo "  Warning: Base URL empty; list models may fail." >&2
+      [[ "$custom_choice" == "9" && -z "$base_url" ]] && echo "  Warning: Base URL empty; list models may fail." >&2
       ;;
     *) backend="lmstudio"; base_url="${LMSTUDIO_URL}"; api_key="" ;;
   esac
@@ -1533,7 +1548,8 @@ load_model_with_context() {
 
 # --- Update ~/.claude/settings.json ---
 # Args: model_id, base_url, auth_token, api_key, backend
-# For openrouter|custom only ANTHROPIC_API_KEY is set (avoids Claude Code "auth conflict"); for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN.
+# For openrouter|custom|newapi only ANTHROPIC_API_KEY is set (avoids Claude Code "auth conflict"); for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN.
+# Exception: Alibaba /apps/anthropic uses ANTHROPIC_AUTH_TOKEN (like lmstudio/ollama).
 write_settings() {
   local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}" backend="${5:-lmstudio}"
   [[ -z "$api_key" ]] && api_key="$auth_token"
@@ -1542,8 +1558,15 @@ write_settings() {
   local schema="https://json.schemastore.org/claude-code-settings.json"
   local tmp
   tmp=$(mktemp)
+
+  # Alibaba /apps/anthropic uses ANTHROPIC_AUTH_TOKEN instead of API_KEY
+  local use_auth_token=0
+  if [[ "$backend" == "custom" && "$base_url" == *"dashscope-intl.aliyuncs.com/apps/anthropic"* ]]; then
+    use_auth_token=1
+  fi
+
   case "$backend" in
-    openrouter|custom|newapi)
+    openrouter|newapi)
       if command -v jq &>/dev/null; then
         jq -n \
           --arg schema "$schema" \
@@ -1566,6 +1589,57 @@ print(json.dumps({
     \"showTurnDuration\": ($show_turn == \"true\")
 }, indent=2))
 " > "$tmp"
+      fi ;;
+    custom)
+      # Custom backend: use AUTH_TOKEN for Alibaba /apps/anthropic, API_KEY for others
+      if [[ $use_auth_token -eq 1 ]]; then
+        if command -v jq &>/dev/null; then
+          jq -n \
+            --arg schema "$schema" \
+            --arg base "$base_url" \
+            --arg auth "$auth_token" \
+            --arg model "$model_id" \
+            --arg show_turn "$show_turn" \
+            '{"$schema": $schema, "env": {"ANTHROPIC_BASE_URL": $base, "ANTHROPIC_AUTH_TOKEN": $auth}, "defaultModel": $model, "showTurnDuration": ($show_turn == "true")}' \
+            > "$tmp"
+        else
+          python3 -c "
+import json
+print(json.dumps({
+    \"\$schema\": \"$schema\",
+    \"env\": {
+        \"ANTHROPIC_BASE_URL\": \"$base_url\",
+        \"ANTHROPIC_AUTH_TOKEN\": \"$auth_token\"
+    },
+    \"defaultModel\": \"$model_id\",
+    \"showTurnDuration\": ($show_turn == \"true\")
+}, indent=2))
+" > "$tmp"
+        fi
+      else
+        if command -v jq &>/dev/null; then
+          jq -n \
+            --arg schema "$schema" \
+            --arg base "$base_url" \
+            --arg apik "$api_key" \
+            --arg model "$model_id" \
+            --arg show_turn "$show_turn" \
+            '{"$schema": $schema, "env": {"ANTHROPIC_BASE_URL": $base, "ANTHROPIC_API_KEY": $apik}, "defaultModel": $model, "showTurnDuration": ($show_turn == "true")}' \
+            > "$tmp"
+        else
+          python3 -c "
+import json
+print(json.dumps({
+    \"\$schema\": \"$schema\",
+    \"env\": {
+        \"ANTHROPIC_BASE_URL\": \"$base_url\",
+        \"ANTHROPIC_API_KEY\": \"$api_key\"
+    },
+    \"defaultModel\": \"$model_id\",
+    \"showTurnDuration\": ($show_turn == \"true\")
+}, indent=2))
+" > "$tmp"
+        fi
       fi ;;
     *)
       if command -v jq &>/dev/null; then
@@ -1601,22 +1675,30 @@ print(json.dumps({
 
 # --- Verify config and export env for this process ---
 # Args: model_id, base_url, auth_token, api_key, backend
-# For openrouter|custom only export ANTHROPIC_API_KEY; for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN (avoids Claude "auth conflict").
+# For openrouter|custom|newapi only export ANTHROPIC_API_KEY; for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN (avoids Claude "auth conflict").
+# Exception: Alibaba /apps/anthropic uses ANTHROPIC_AUTH_TOKEN (like lmstudio/ollama).
 verify_and_export() {
   local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}" backend="${5:-lmstudio}"
   [[ -z "$api_key" ]] && api_key="$auth_token"
   export ANTHROPIC_BASE_URL="$base_url"
   export CLAUDE_CODE_ATTRIBUTION_HEADER="0"
-  case "$backend" in
-    openrouter|custom|newapi)
-      unset -v ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
-      export ANTHROPIC_API_KEY="$api_key"
-      ;;
-    *)
-      unset -v ANTHROPIC_API_KEY 2>/dev/null || true
-      export ANTHROPIC_AUTH_TOKEN="$auth_token"
-      ;;
-  esac
+
+  # Alibaba /apps/anthropic uses ANTHROPIC_AUTH_TOKEN instead of API_KEY
+  local use_auth_token=0
+  if [[ "$backend" == "custom" && "$base_url" == *"dashscope-intl.aliyuncs.com/apps/anthropic"* ]]; then
+    use_auth_token=1
+  fi
+
+  if [[ $use_auth_token -eq 1 ]]; then
+    unset -v ANTHROPIC_API_KEY 2>/dev/null || true
+    export ANTHROPIC_AUTH_TOKEN="$auth_token"
+  elif [[ "$backend" == "openrouter" || "$backend" == "custom" || "$backend" == "newapi" ]]; then
+    unset -v ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
+    export ANTHROPIC_API_KEY="$api_key"
+  else
+    unset -v ANTHROPIC_API_KEY 2>/dev/null || true
+    export ANTHROPIC_AUTH_TOKEN="$auth_token"
+  fi
 
   if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
     echo "Warning: $CLAUDE_SETTINGS not found after write." >&2
@@ -1635,10 +1717,13 @@ verify_and_export() {
   echo ""
   echo "Verified:"
   echo "  ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"
-  case "$backend" in
-    openrouter|custom|newapi) echo "  ANTHROPIC_API_KEY=<set>" ;;
-    *) echo "  ANTHROPIC_AUTH_TOKEN=<set>" ;;
-  esac
+  if [[ $use_auth_token -eq 1 ]]; then
+    echo "  ANTHROPIC_AUTH_TOKEN=<set>"
+  elif [[ "$backend" == "openrouter" || "$backend" == "custom" || "$backend" == "newapi" ]]; then
+    echo "  ANTHROPIC_API_KEY=<set>"
+  else
+    echo "  ANTHROPIC_AUTH_TOKEN=<set>"
+  fi
   echo "  defaultModel (for this run)= $model_id"
   echo ""
 }
