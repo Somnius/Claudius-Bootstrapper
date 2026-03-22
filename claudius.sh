@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Claudius v0.9.7 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, llama.cpp server, OpenRouter, Custom, NewAPI).
+# Claudius v0.9.8 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, llama.cpp server, OpenRouter, Custom, NewAPI).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context (where applicable), update config, run claude.
 # Supports: bash, zsh, fish, ksh, sh. Platforms: Linux, macOS, Windows (Git Bash/WSL).
 
 set -euo pipefail
 
-VERSION="0.9.7"
+VERSION="0.9.8"
 
 # --help function: Display usage information
 print_help() {
   cat << 'EOF'
 Usage: claudius [OPTIONS]
 
-Claudius v0.9.7 - Claude Code multi-backend bootstrapper
+Claudius v0.9.8 - Claude Code multi-backend bootstrapper
 
 Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, llama.cpp server (llama-server),
 OpenRouter, Custom (many presets), or NewAPI (QuantumNous unified gateway). Custom presets: Alibaba, Kimi,
@@ -591,6 +591,9 @@ run_init() {
       backend="llamacpp"
       read -rp "llama.cpp server base URL [http://127.0.0.1:8080]: " base_url
       base_url="${base_url:-http://127.0.0.1:8080}"
+      if ! base_url=$(normalize_remote_url "$base_url" 8080); then
+        base_url="http://127.0.0.1:8080"
+      fi
       local llama_tok
       read -rp "Bearer/API token → ANTHROPIC_AUTH_TOKEN [lmstudio]: " llama_tok
       llama_tok="${llama_tok:-lmstudio}"
@@ -819,28 +822,57 @@ normalize_remote_url() {
 }
 
 # --- Prompt for remote server address and backend type; set CURRENT_BASE_URL, CURRENT_BACKEND and save to prefs ---
+# Optional $1: fixed_backend = lmstudio|ollama|llamacpp — skip "which backend" menu (same backend as current flow).
+# When fixed_backend is set, Enter alone keeps CURRENT_BASE_URL (retry / confirm without retyping).
 prompt_remote_server() {
-  local addr backend_num default_port
+  local fixed_backend="${1:-}"
+  local addr backend_num default_port default_hint=""
   echo "Connect to a remote server (e.g. another machine on your network)."
-  read -rp "Enter server address (host or IP:port, e.g. 192.168.1.10:1234): " addr
+  if [[ -n "${CURRENT_BASE_URL:-}" ]]; then
+    default_hint="${CURRENT_BASE_URL#http://}"
+    default_hint="${default_hint#https://}"
+  fi
+  if [[ -n "$default_hint" ]]; then
+    if [[ -n "$fixed_backend" ]]; then
+      read -rp "Enter server address (host or IP:port) [${default_hint}, Enter=keep]: " addr
+    else
+      read -rp "Enter server address (host or IP:port) [${default_hint}]: " addr
+    fi
+  else
+    read -rp "Enter server address (host or IP:port, e.g. 192.168.1.10:1234): " addr
+  fi
   addr=$(echo "$addr" | tr -d ' \t')
   if [[ -z "$addr" ]]; then
-    echo "  No address entered. Skipped."
-    return 1
+    if [[ -n "$fixed_backend" && -n "${CURRENT_BASE_URL:-}" ]]; then
+      addr="$CURRENT_BASE_URL"
+    else
+      echo "  No address entered. Skipped."
+      return 1
+    fi
   fi
-  echo ""
-  echo "Backend running on this server:"
-  echo "  1) LM Studio (default port 1234)"
-  echo "  2) Ollama (default port 11434)"
-  echo "  3) llama.cpp server / llama-server (default port 8080)"
-  read -rp "Choose (1-3) [1]: " backend_num
-  backend_num="${backend_num:-1}"
-  case "$backend_num" in
-    1) CURRENT_BACKEND="lmstudio"; default_port=1234 ;;
-    2) CURRENT_BACKEND="ollama";   default_port=11434 ;;
-    3) CURRENT_BACKEND="llamacpp";  default_port=8080 ;;
-    *) echo "  Invalid choice. Using LM Studio (1234)."; CURRENT_BACKEND="lmstudio"; default_port=1234 ;;
-  esac
+  if [[ -n "$fixed_backend" ]]; then
+    CURRENT_BACKEND="$fixed_backend"
+    case "$fixed_backend" in
+      lmstudio) default_port=1234 ;;
+      ollama)   default_port=11434 ;;
+      llamacpp) default_port=8080 ;;
+      *) echo "  Internal error: bad fixed_backend."; return 1 ;;
+    esac
+  else
+    echo ""
+    echo "Backend running on this server:"
+    echo "  1) LM Studio (default port 1234)"
+    echo "  2) Ollama (default port 11434)"
+    echo "  3) llama.cpp server / llama-server (default port 8080)"
+    read -rp "Choose (1-3) [1]: " backend_num
+    backend_num="${backend_num:-1}"
+    case "$backend_num" in
+      1) CURRENT_BACKEND="lmstudio"; default_port=1234 ;;
+      2) CURRENT_BACKEND="ollama";   default_port=11434 ;;
+      3) CURRENT_BACKEND="llamacpp";  default_port=8080 ;;
+      *) echo "  Invalid choice. Using LM Studio (1234)."; CURRENT_BACKEND="lmstudio"; default_port=1234 ;;
+    esac
+  fi
   CURRENT_BASE_URL=$(normalize_remote_url "$addr" "$default_port")
   if [[ -z "$CURRENT_BASE_URL" ]]; then
     echo "  Could not parse address. Skipped."
@@ -881,6 +913,12 @@ resolve_backend() {
       newapi)   ;;  # no default; user must set in prefs
       *)        CURRENT_BASE_URL="" ;;
     esac
+  fi
+  # llama.cpp: prefs may store host:port without scheme — curl needs http://...
+  if [[ "$CURRENT_BACKEND" == "llamacpp" && -n "$CURRENT_BASE_URL" && "$CURRENT_BASE_URL" != http://* && "$CURRENT_BASE_URL" != https://* ]]; then
+    local _llama_nu
+    _llama_nu=$(normalize_remote_url "$CURRENT_BASE_URL" 8080) || true
+    [[ -n "$_llama_nu" ]] && CURRENT_BASE_URL="$_llama_nu"
   fi
   [[ -z "$CURRENT_API_KEY" ]] && CURRENT_API_KEY=""
   # Auth token for Claude Code settings: LM Studio uses placeholder; llamacpp uses prefs or env; cloud uses API key
@@ -1085,7 +1123,7 @@ wait_for_server() {
           echo ""
           ;;
         2)
-          if prompt_remote_server; then
+          if prompt_remote_server llamacpp; then
             if check_server_for_backend; then
               echo "Server is up. Continuing."
               return 0
