@@ -1,20 +1,26 @@
+# Project generated files and temporary data
+*~
+*.swp
+*.swo
+.idea/
+
+.vscode/
+.vimrc
+.DS_Store
+Thumbs.db
+
+# Development environment
+node_modules/
+venv/
+__pycache__/
+*.pyc
+
 # Notes and local docs (may contain private/session info)
 NOTES*.md
 notes*.md
 discussion-log.md
 CLAUDE.md
 GUIDE-VSCODE-CLAUDE-CHAT.md
-*.sty
-
-# OS and editor
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
-*~
-
-# Local backups (versioned archives, exclude from repo)
-backups/
 
 # Sensitive or machine-specific
 .env
@@ -23,7 +29,7 @@ backups/
 *.secret
 secrets/
 
-# Optional: uncomment if you keep venv or temp here
-# *.venv/
-# __pycache__/
-# *.pyc
+# Generated or temporary files
+backups/
+*~
+
