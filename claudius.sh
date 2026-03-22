@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Claudius v0.9.5 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, llama.cpp server, OpenRouter, Custom, NewAPI).
+# Claudius v0.9.6 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, llama.cpp server, OpenRouter, Custom, NewAPI).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context (where applicable), update config, run claude.
 # Supports: bash, zsh, fish, ksh, sh. Platforms: Linux, macOS, Windows (Git Bash/WSL).
 
 set -euo pipefail
 
-VERSION="0.9.5"
+VERSION="0.9.6"
 
 # --help function: Display usage information
 print_help() {
   cat << 'EOF'
 Usage: claudius [OPTIONS]
 
-Claudius v0.9.5 - Claude Code multi-backend bootstrapper
+Claudius v0.9.6 - Claude Code multi-backend bootstrapper
 
 Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, llama.cpp server (llama-server),
 OpenRouter, Custom (many presets), or NewAPI (QuantumNous unified gateway). Custom presets: Alibaba, Kimi,
@@ -36,7 +36,8 @@ Environment Variables:
   LLAMA_CPP_URL      llama-server base URL (default: http://127.0.0.1:8080)
   CLAUDIUS_AUTH_TOKEN  Override ANTHROPIC_AUTH_TOKEN (e.g. for llamacpp; default from prefs or lmstudio)
   CLAUDIUS_BASE_URL  Override base URL (custom, openrouter, newapi, or llamacpp)
-  CLAUDIUS_API_KEY   API key for OpenRouter or custom backend
+  CLAUDIUS_API_KEY   API key (stored in prefs; for OpenRouter written to settings as ANTHROPIC_AUTH_TOKEN per OpenRouter docs)
+  OPENROUTER_URL     Default https://openrouter.ai/api (do not use .../api/v1 for Claude Code)
   CURL_TIMEOUT_CLOUD Max time (seconds) for OpenRouter/custom model-list HTTP; default 25 (default CURL_TIMEOUT is 10)
   DASHSCOPE_INTL_ANTHROPIC_BASE / DASHSCOPE_INTL_OPENAI_BASE  Override Alibaba intl. Anthropic vs OpenAI list URLs (advanced)
   CLAUDIUS_SHELL     Override shell for config file (bash|zsh|fish|ksh|sh)
@@ -61,7 +62,8 @@ CLAUDE_HOME="${HOME}/.claude"
 LMSTUDIO_URL="${LMSTUDIO_URL:-http://localhost:1234}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 LLAMA_CPP_URL="${LLAMA_CPP_URL:-http://127.0.0.1:8080}"
-OPENROUTER_URL="${OPENROUTER_URL:-https://openrouter.ai/api/v1}"
+# Claude Code appends /v1/messages — OpenRouter requires host .../api only (NOT .../api/v1). See openrouter.ai/docs Claude Code guide.
+OPENROUTER_URL="${OPENROUTER_URL:-https://openrouter.ai/api}"
 LMSTUDIO_API="${LMSTUDIO_URL}/api/v1"
 
 # Session-related paths under ~/.claude to purge (do not include settings.json or claudius-prefs.json)
@@ -174,7 +176,7 @@ ensure_claudius_alias_in_shell_config() {
 
 # --- Append Claude Code env block to the correct config file with correct syntax ---
 # Args: shell, base_url, auth_token, api_key, backend
-# For openrouter|custom|newapi only ANTHROPIC_API_KEY; for lmstudio|ollama|llamacpp only ANTHROPIC_AUTH_TOKEN (avoids Claude "auth conflict").
+# OpenRouter: ANTHROPIC_AUTH_TOKEN + empty ANTHROPIC_API_KEY (OpenRouter docs). custom|newapi: ANTHROPIC_API_KEY only. lmstudio|ollama|llamacpp: AUTH_TOKEN.
 update_shell_exports() {
   local shell="${1:-bash}" base_url="$2" auth_token="${3:-}" api_key="${4:-}" backend="${5:-lmstudio}"
   local config_file marker block
@@ -189,7 +191,12 @@ update_shell_exports() {
   if [[ "$shell" == "fish" ]]; then
     mkdir -p "${HOME}/.config/fish"
     case "$backend" in
-      openrouter|custom|newapi)
+      openrouter)
+        block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
+set -gx ANTHROPIC_AUTH_TOKEN \"${api_key}\"
+set -gx ANTHROPIC_API_KEY \"\"
+set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
+      custom|newapi)
         block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
 set -gx ANTHROPIC_API_KEY \"${api_key}\"
 set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
@@ -207,7 +214,12 @@ set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
     esac
   else
     case "$backend" in
-      openrouter|custom|newapi)
+      openrouter)
+        block="export ANTHROPIC_BASE_URL=\"${base_url}\"
+export ANTHROPIC_AUTH_TOKEN=\"${api_key}\"
+export ANTHROPIC_API_KEY=\"\"
+export CLAUDE_CODE_ATTRIBUTION_HEADER=0" ;;
+      custom|newapi)
         block="export ANTHROPIC_BASE_URL=\"${base_url}\"
 export ANTHROPIC_API_KEY=\"${api_key}\"
 export CLAUDE_CODE_ATTRIBUTION_HEADER=0" ;;
@@ -495,7 +507,7 @@ run_init() {
   echo "Which backend should Claudius use?"
   echo "  1) LM Studio (local, default http://localhost:1234)"
   echo "  2) Ollama (local, default http://localhost:11434)"
-  echo "  3) OpenRouter (cloud, requires API key)"
+  echo "  3) OpenRouter (cloud; Claude Code base https://openrouter.ai/api — requires API key)"
   echo "  4) Custom (Alibaba, Kimi, DeepSeek, Groq, OpenRouter, xAI, OpenAI, or other — API key)"
   echo "  5) NewAPI (unified gateway — self‑host or cloud, https://github.com/QuantumNous/new-api)"
   echo "  6) llama.cpp server (llama-server, OpenAI-compatible /v1; default http://127.0.0.1:8080)"
@@ -885,6 +897,23 @@ resolve_backend() {
       CURRENT_CUSTOM_LIST_URL="$CURRENT_BASE_URL"
     fi
   fi
+
+  # OpenRouter: ANTHROPIC_BASE_URL must be https://openrouter.ai/api (Claude Code adds /v1/messages). Old .../api/v1 breaks chat.
+  if [[ "$CURRENT_BACKEND" == "openrouter" ]]; then
+    if [[ "$CURRENT_BASE_URL" == *"openrouter.ai/api/v1"* ]]; then
+      local or_migrate_prefs=0
+      if [[ -z "${CLAUDIUS_BACKEND:-}" && -z "${CLAUDIUS_BASE_URL:-}" && -f "$CLAUDIUS_PREFS" ]]; then
+        local saved_or
+        saved_or=$(get_pref "baseUrl")
+        [[ "$saved_or" == *"openrouter.ai/api/v1"* ]] && or_migrate_prefs=1
+      fi
+      CURRENT_BASE_URL="https://openrouter.ai/api"
+      if [[ "$or_migrate_prefs" -eq 1 ]]; then
+        merge_prefs "openrouter" "$CURRENT_BASE_URL" "$CURRENT_API_KEY" || true
+        echo "  Updated prefs: OpenRouter base URL → https://openrouter.ai/api (required for Claude Code; see OpenRouter docs)." >&2
+      fi
+    fi
+  fi
 }
 
 # --- Check if LM Studio server is reachable ---
@@ -1261,22 +1290,35 @@ except Exception:
   return 1
 }
 
-# --- OpenRouter: check (GET /api/v1/models with Bearer), list models ---
+# OpenRouter model catalog is at GET https://openrouter.ai/api/v1/models; Claude Code base must be https://openrouter.ai/api (no /v1).
+openrouter_models_list_url() {
+  local b="${1%/}"
+  if [[ "$b" == *"/api/v1" ]]; then
+    echo "${b}/models"
+  else
+    echo "${b}/v1/models"
+  fi
+}
+
+# --- OpenRouter: check (GET .../api/v1/models with Bearer), list models ---
 check_server_openrouter() {
   local base_url="${1:-$OPENROUTER_URL}" api_key="$2"
   local tm="${CURL_TIMEOUT_CLOUD:-$CURL_TIMEOUT}"
+  local list_url
+  list_url=$(openrouter_models_list_url "$base_url")
   local code
   code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time "$tm" --retry 2 --retry-delay 1 \
-    -H "Authorization: Bearer ${api_key}" "${base_url}/models" 2>/dev/null) || true
+    -H "Authorization: Bearer ${api_key}" "$list_url" 2>/dev/null) || true
   [[ "$code" == "200" ]]
 }
 
 fetch_models_openrouter() {
   local base_url="${1:-$OPENROUTER_URL}" api_key="$2"
   local tm="${CURL_TIMEOUT_CLOUD:-$CURL_TIMEOUT}"
-  local resp
+  local list_url resp
+  list_url=$(openrouter_models_list_url "$base_url")
   resp=$(curl -sS --connect-timeout 5 --max-time "$tm" --retry 2 --retry-delay 1 \
-    -H "Authorization: Bearer ${api_key}" "${base_url}/models" 2>/dev/null) || true
+    -H "Authorization: Bearer ${api_key}" "$list_url" 2>/dev/null) || true
   if [[ -z "${resp}" ]]; then
     echo "Error: Could not reach OpenRouter. Check API key and network." >&2
     return 1
@@ -1773,7 +1815,7 @@ load_model_with_context() {
 
 # --- Update ~/.claude/settings.json ---
 # Args: model_id, base_url, auth_token, api_key, backend
-# For openrouter|custom only ANTHROPIC_API_KEY is set (avoids Claude Code "auth conflict"); for lmstudio|ollama|llamacpp only ANTHROPIC_AUTH_TOKEN (llamacpp also sets compaction/tool-search defaults).
+# OpenRouter: per official Claude Code guide — ANTHROPIC_AUTH_TOKEN + ANTHROPIC_API_KEY "". custom|newapi: API_KEY. lmstudio|ollama|llamacpp: AUTH_TOKEN (llamacpp adds extras).
 write_settings() {
   local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}" backend="${5:-lmstudio}"
   [[ -z "$api_key" ]] && api_key="$auth_token"
@@ -1783,7 +1825,32 @@ write_settings() {
   local tmp
   tmp=$(mktemp)
   case "$backend" in
-    openrouter|custom|newapi)
+    openrouter)
+      if command -v jq &>/dev/null; then
+        jq -n \
+          --arg schema "$schema" \
+          --arg base "$base_url" \
+          --arg tok "$api_key" \
+          --arg model "$model_id" \
+          --arg show_turn "$show_turn" \
+          '{"$schema": $schema, "env": {"ANTHROPIC_BASE_URL": $base, "ANTHROPIC_AUTH_TOKEN": $tok, "ANTHROPIC_API_KEY": ""}, "defaultModel": $model, "showTurnDuration": ($show_turn == "true")}' \
+          > "$tmp"
+      else
+        python3 -c "
+import json
+print(json.dumps({
+    \"\$schema\": \"$schema\",
+    \"env\": {
+        \"ANTHROPIC_BASE_URL\": \"$base_url\",
+        \"ANTHROPIC_AUTH_TOKEN\": \"$api_key\",
+        \"ANTHROPIC_API_KEY\": \"\"
+    },
+    \"defaultModel\": \"$model_id\",
+    \"showTurnDuration\": ($show_turn == \"true\")
+}, indent=2))
+" > "$tmp"
+      fi ;;
+    custom|newapi)
       if command -v jq &>/dev/null; then
         jq -n \
           --arg schema "$schema" \
@@ -1869,14 +1936,20 @@ print(json.dumps({
 
 # --- Verify config and export env for this process ---
 # Args: model_id, base_url, auth_token, api_key, backend
-# For openrouter|custom only export ANTHROPIC_API_KEY; for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN; llamacpp adds tool search + compaction window defaults.
+# OpenRouter: AUTH_TOKEN + empty API_KEY (official). custom|newapi: API_KEY. lmstudio|ollama: AUTH_TOKEN. llamacpp: same + compaction/tool-search.
 verify_and_export() {
   local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}" backend="${5:-lmstudio}"
   [[ -z "$api_key" ]] && api_key="$auth_token"
   export ANTHROPIC_BASE_URL="$base_url"
   export CLAUDE_CODE_ATTRIBUTION_HEADER="0"
   case "$backend" in
-    openrouter|custom|newapi)
+    openrouter)
+      unset -v ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
+      unset -v ANTHROPIC_API_KEY 2>/dev/null || true
+      export ANTHROPIC_AUTH_TOKEN="$api_key"
+      export ANTHROPIC_API_KEY=""
+      ;;
+    custom|newapi)
       unset -v ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
       export ANTHROPIC_API_KEY="$api_key"
       ;;
@@ -1911,7 +1984,11 @@ verify_and_export() {
   echo "Verified:"
   echo "  ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"
   case "$backend" in
-    openrouter|custom|newapi) echo "  ANTHROPIC_API_KEY=<set>" ;;
+    openrouter)
+      echo "  ANTHROPIC_AUTH_TOKEN=<set> (OpenRouter key)"
+      echo "  ANTHROPIC_API_KEY=(empty)"
+      ;;
+    custom|newapi) echo "  ANTHROPIC_API_KEY=<set>" ;;
     llamacpp)
       echo "  ANTHROPIC_AUTH_TOKEN=<set>"
       echo "  ANTHROPIC_API_KEY=(empty)"
