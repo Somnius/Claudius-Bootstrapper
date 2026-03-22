@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Claudius v0.9.6 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, llama.cpp server, OpenRouter, Custom, NewAPI).
+# Claudius v0.9.7 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, llama.cpp server, OpenRouter, Custom, NewAPI).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context (where applicable), update config, run claude.
 # Supports: bash, zsh, fish, ksh, sh. Platforms: Linux, macOS, Windows (Git Bash/WSL).
 
 set -euo pipefail
 
-VERSION="0.9.6"
+VERSION="0.9.7"
 
 # --help function: Display usage information
 print_help() {
   cat << 'EOF'
 Usage: claudius [OPTIONS]
 
-Claudius v0.9.6 - Claude Code multi-backend bootstrapper
+Claudius v0.9.7 - Claude Code multi-backend bootstrapper
 
 Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, llama.cpp server (llama-server),
 OpenRouter, Custom (many presets), or NewAPI (QuantumNous unified gateway). Custom presets: Alibaba, Kimi,
@@ -36,7 +36,7 @@ Environment Variables:
   LLAMA_CPP_URL      llama-server base URL (default: http://127.0.0.1:8080)
   CLAUDIUS_AUTH_TOKEN  Override ANTHROPIC_AUTH_TOKEN (e.g. for llamacpp; default from prefs or lmstudio)
   CLAUDIUS_BASE_URL  Override base URL (custom, openrouter, newapi, or llamacpp)
-  CLAUDIUS_API_KEY   API key (stored in prefs; for OpenRouter written to settings as ANTHROPIC_AUTH_TOKEN per OpenRouter docs)
+  CLAUDIUS_API_KEY   API key in prefs; for OpenRouter and Alibaba DashScope …/apps/anthropic (custom) written to settings as ANTHROPIC_AUTH_TOKEN with ANTHROPIC_API_KEY ""
   OPENROUTER_URL     Default https://openrouter.ai/api (do not use .../api/v1 for Claude Code)
   CURL_TIMEOUT_CLOUD Max time (seconds) for OpenRouter/custom model-list HTTP; default 25 (default CURL_TIMEOUT is 10)
   DASHSCOPE_INTL_ANTHROPIC_BASE / DASHSCOPE_INTL_OPENAI_BASE  Override Alibaba intl. Anthropic vs OpenAI list URLs (advanced)
@@ -176,10 +176,12 @@ ensure_claudius_alias_in_shell_config() {
 
 # --- Append Claude Code env block to the correct config file with correct syntax ---
 # Args: shell, base_url, auth_token, api_key, backend
-# OpenRouter: ANTHROPIC_AUTH_TOKEN + empty ANTHROPIC_API_KEY (OpenRouter docs). custom|newapi: ANTHROPIC_API_KEY only. lmstudio|ollama|llamacpp: AUTH_TOKEN.
+# OpenRouter: ANTHROPIC_AUTH_TOKEN + empty ANTHROPIC_API_KEY (OpenRouter docs). Alibaba DashScope /apps/anthropic (custom): same pattern (imported from v0.9.4 GitHub). Other custom|newapi: API_KEY only. lmstudio|ollama|llamacpp: AUTH_TOKEN.
 update_shell_exports() {
   local shell="${1:-bash}" base_url="$2" auth_token="${3:-}" api_key="${4:-}" backend="${5:-lmstudio}"
   local config_file marker block
+  local dashscope_anthropic=0
+  [[ "$backend" == "custom" && "$base_url" == *"dashscope"* && "$base_url" == *"/apps/anthropic"* ]] && dashscope_anthropic=1
   config_file=$(get_shell_config_file "$shell")
   marker="# Claude Code → Claudius (ANTHROPIC_BASE_URL for backend)"
 
@@ -196,7 +198,18 @@ update_shell_exports() {
 set -gx ANTHROPIC_AUTH_TOKEN \"${api_key}\"
 set -gx ANTHROPIC_API_KEY \"\"
 set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
-      custom|newapi)
+      custom)
+        if [[ $dashscope_anthropic -eq 1 ]]; then
+          block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
+set -gx ANTHROPIC_AUTH_TOKEN \"${api_key}\"
+set -gx ANTHROPIC_API_KEY \"\"
+set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0"
+        else
+          block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
+set -gx ANTHROPIC_API_KEY \"${api_key}\"
+set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0"
+        fi ;;
+      newapi)
         block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
 set -gx ANTHROPIC_API_KEY \"${api_key}\"
 set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
@@ -219,7 +232,18 @@ set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
 export ANTHROPIC_AUTH_TOKEN=\"${api_key}\"
 export ANTHROPIC_API_KEY=\"\"
 export CLAUDE_CODE_ATTRIBUTION_HEADER=0" ;;
-      custom|newapi)
+      custom)
+        if [[ $dashscope_anthropic -eq 1 ]]; then
+          block="export ANTHROPIC_BASE_URL=\"${base_url}\"
+export ANTHROPIC_AUTH_TOKEN=\"${api_key}\"
+export ANTHROPIC_API_KEY=\"\"
+export CLAUDE_CODE_ATTRIBUTION_HEADER=0"
+        else
+          block="export ANTHROPIC_BASE_URL=\"${base_url}\"
+export ANTHROPIC_API_KEY=\"${api_key}\"
+export CLAUDE_CODE_ATTRIBUTION_HEADER=0"
+        fi ;;
+      newapi)
         block="export ANTHROPIC_BASE_URL=\"${base_url}\"
 export ANTHROPIC_API_KEY=\"${api_key}\"
 export CLAUDE_CODE_ATTRIBUTION_HEADER=0" ;;
@@ -1815,11 +1839,12 @@ load_model_with_context() {
 
 # --- Update ~/.claude/settings.json ---
 # Args: model_id, base_url, auth_token, api_key, backend
-# OpenRouter: per official Claude Code guide — ANTHROPIC_AUTH_TOKEN + ANTHROPIC_API_KEY "". custom|newapi: API_KEY. lmstudio|ollama|llamacpp: AUTH_TOKEN (llamacpp adds extras).
+# OpenRouter: ANTHROPIC_AUTH_TOKEN + ANTHROPIC_API_KEY "". Alibaba DashScope custom /apps/anthropic: same (v0.9.4 GitHub). Other custom|newapi: API_KEY only. lmstudio|ollama|llamacpp: AUTH_TOKEN (llamacpp adds extras).
 write_settings() {
   local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}" backend="${5:-lmstudio}"
   [[ -z "$api_key" ]] && api_key="$auth_token"
-  local show_turn
+  local show_turn dashscope_anthropic=0
+  [[ "$backend" == "custom" && "$base_url" == *"dashscope"* && "$base_url" == *"/apps/anthropic"* ]] && dashscope_anthropic=1
   show_turn=$(get_show_turn_duration)
   local schema="https://json.schemastore.org/claude-code-settings.json"
   local tmp
@@ -1850,7 +1875,58 @@ print(json.dumps({
 }, indent=2))
 " > "$tmp"
       fi ;;
-    custom|newapi)
+    custom)
+      if [[ $dashscope_anthropic -eq 1 ]]; then
+        if command -v jq &>/dev/null; then
+          jq -n \
+            --arg schema "$schema" \
+            --arg base "$base_url" \
+            --arg tok "$api_key" \
+            --arg model "$model_id" \
+            --arg show_turn "$show_turn" \
+            '{"$schema": $schema, "env": {"ANTHROPIC_BASE_URL": $base, "ANTHROPIC_AUTH_TOKEN": $tok, "ANTHROPIC_API_KEY": ""}, "defaultModel": $model, "showTurnDuration": ($show_turn == "true")}' \
+            > "$tmp"
+        else
+          python3 -c "
+import json
+print(json.dumps({
+    \"\$schema\": \"$schema\",
+    \"env\": {
+        \"ANTHROPIC_BASE_URL\": \"$base_url\",
+        \"ANTHROPIC_AUTH_TOKEN\": \"$api_key\",
+        \"ANTHROPIC_API_KEY\": \"\"
+    },
+    \"defaultModel\": \"$model_id\",
+    \"showTurnDuration\": ($show_turn == \"true\")
+}, indent=2))
+" > "$tmp"
+        fi
+      else
+        if command -v jq &>/dev/null; then
+          jq -n \
+            --arg schema "$schema" \
+            --arg base "$base_url" \
+            --arg apik "$api_key" \
+            --arg model "$model_id" \
+            --arg show_turn "$show_turn" \
+            '{"$schema": $schema, "env": {"ANTHROPIC_BASE_URL": $base, "ANTHROPIC_API_KEY": $apik}, "defaultModel": $model, "showTurnDuration": ($show_turn == "true")}' \
+            > "$tmp"
+        else
+          python3 -c "
+import json
+print(json.dumps({
+    \"\$schema\": \"$schema\",
+    \"env\": {
+        \"ANTHROPIC_BASE_URL\": \"$base_url\",
+        \"ANTHROPIC_API_KEY\": \"$api_key\"
+    },
+    \"defaultModel\": \"$model_id\",
+    \"showTurnDuration\": ($show_turn == \"true\")
+}, indent=2))
+" > "$tmp"
+        fi
+      fi ;;
+    newapi)
       if command -v jq &>/dev/null; then
         jq -n \
           --arg schema "$schema" \
@@ -1936,9 +2012,11 @@ print(json.dumps({
 
 # --- Verify config and export env for this process ---
 # Args: model_id, base_url, auth_token, api_key, backend
-# OpenRouter: AUTH_TOKEN + empty API_KEY (official). custom|newapi: API_KEY. lmstudio|ollama: AUTH_TOKEN. llamacpp: same + compaction/tool-search.
+# OpenRouter: AUTH_TOKEN + empty API_KEY (official). Alibaba DashScope custom /apps/anthropic: same. Other custom|newapi: API_KEY. lmstudio|ollama: AUTH_TOKEN. llamacpp: same + compaction/tool-search.
 verify_and_export() {
   local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}" backend="${5:-lmstudio}"
+  local dashscope_anthropic=0
+  [[ "$backend" == "custom" && "$base_url" == *"dashscope"* && "$base_url" == *"/apps/anthropic"* ]] && dashscope_anthropic=1
   [[ -z "$api_key" ]] && api_key="$auth_token"
   export ANTHROPIC_BASE_URL="$base_url"
   export CLAUDE_CODE_ATTRIBUTION_HEADER="0"
@@ -1949,7 +2027,18 @@ verify_and_export() {
       export ANTHROPIC_AUTH_TOKEN="$api_key"
       export ANTHROPIC_API_KEY=""
       ;;
-    custom|newapi)
+    custom)
+      if [[ $dashscope_anthropic -eq 1 ]]; then
+        unset -v ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
+        unset -v ANTHROPIC_API_KEY 2>/dev/null || true
+        export ANTHROPIC_AUTH_TOKEN="$api_key"
+        export ANTHROPIC_API_KEY=""
+      else
+        unset -v ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
+        export ANTHROPIC_API_KEY="$api_key"
+      fi
+      ;;
+    newapi)
       unset -v ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
       export ANTHROPIC_API_KEY="$api_key"
       ;;
@@ -1988,7 +2077,15 @@ verify_and_export() {
       echo "  ANTHROPIC_AUTH_TOKEN=<set> (OpenRouter key)"
       echo "  ANTHROPIC_API_KEY=(empty)"
       ;;
-    custom|newapi) echo "  ANTHROPIC_API_KEY=<set>" ;;
+    custom)
+      if [[ $dashscope_anthropic -eq 1 ]]; then
+        echo "  ANTHROPIC_AUTH_TOKEN=<set> (DashScope API key)"
+        echo "  ANTHROPIC_API_KEY=(empty)"
+      else
+        echo "  ANTHROPIC_API_KEY=<set>"
+      fi
+      ;;
+    newapi) echo "  ANTHROPIC_API_KEY=<set>" ;;
     llamacpp)
       echo "  ANTHROPIC_AUTH_TOKEN=<set>"
       echo "  ANTHROPIC_API_KEY=(empty)"
