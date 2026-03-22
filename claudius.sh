@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# Claudius v0.9.3 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, OpenRouter, Custom, NewAPI).
+# Claudius v0.9.5 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, llama.cpp server, OpenRouter, Custom, NewAPI).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context (where applicable), update config, run claude.
 # Supports: bash, zsh, fish, ksh, sh. Platforms: Linux, macOS, Windows (Git Bash/WSL).
 
 set -euo pipefail
 
-VERSION="0.9.3"
+VERSION="0.9.5"
 
 # --help function: Display usage information
 print_help() {
   cat << 'EOF'
 Usage: claudius [OPTIONS]
 
-Claudius v0.9.3 - Claude Code multi-backend bootstrapper
+Claudius v0.9.5 - Claude Code multi-backend bootstrapper
 
-Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, OpenRouter, Custom (many presets),
-or NewAPI (QuantumNous unified gateway). Custom presets: Alibaba, Kimi, DeepSeek, Groq, OpenRouter, xAI,
-OpenAI, or Other. NewAPI: self-host or cloud; chat at base/v1, list models at base/api/models.
+Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, llama.cpp server (llama-server),
+OpenRouter, Custom (many presets), or NewAPI (QuantumNous unified gateway). Custom presets: Alibaba, Kimi,
+DeepSeek, Groq, OpenRouter, xAI, OpenAI, or Other. NewAPI: self-host or cloud; chat at base/v1, list models at base/api/models.
 Writes env vars to your shell config (bash/zsh/fish/ksh/sh).
 
 Options:
@@ -30,11 +30,15 @@ Options:
   --last           Use last base URL, model, and context length; skip model menu and start Claude Code
 
 Environment Variables:
-  CLAUDIUS_BACKEND   Backend: lmstudio | ollama | openrouter | custom
+  CLAUDIUS_BACKEND   Backend: lmstudio | ollama | llamacpp | openrouter | custom | newapi
   LMSTUDIO_URL       LM Studio base URL (default: http://localhost:1234)
   OLLAMA_URL         Ollama base URL (default: http://localhost:11434)
-  CLAUDIUS_BASE_URL  Custom/OpenRouter base URL (for custom or openrouter)
+  LLAMA_CPP_URL      llama-server base URL (default: http://127.0.0.1:8080)
+  CLAUDIUS_AUTH_TOKEN  Override ANTHROPIC_AUTH_TOKEN (e.g. for llamacpp; default from prefs or lmstudio)
+  CLAUDIUS_BASE_URL  Override base URL (custom, openrouter, newapi, or llamacpp)
   CLAUDIUS_API_KEY   API key for OpenRouter or custom backend
+  CURL_TIMEOUT_CLOUD Max time (seconds) for OpenRouter/custom model-list HTTP; default 25 (default CURL_TIMEOUT is 10)
+  DASHSCOPE_INTL_ANTHROPIC_BASE / DASHSCOPE_INTL_OPENAI_BASE  Override Alibaba intl. Anthropic vs OpenAI list URLs (advanced)
   CLAUDIUS_SHELL     Override shell for config file (bash|zsh|fish|ksh|sh)
 
 Examples:
@@ -44,6 +48,7 @@ Examples:
   claudius --purge                  # Clear session data interactively
   claudius --last                   # Use last model and context; start Claude without menus
   CLAUDIUS_BACKEND=ollama claudius  # Use Ollama (if already configured)
+  CLAUDIUS_BACKEND=llamacpp claudius # llama-server (default URL/token from prefs or LLAMA_CPP_URL)
 
 For more info: https://github.com/Somnius/Claudius-Bootstrapper
 EOF
@@ -55,6 +60,7 @@ CLAUDIUS_PREFS="${HOME}/.claude/claudius-prefs.json"
 CLAUDE_HOME="${HOME}/.claude"
 LMSTUDIO_URL="${LMSTUDIO_URL:-http://localhost:1234}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
+LLAMA_CPP_URL="${LLAMA_CPP_URL:-http://127.0.0.1:8080}"
 OPENROUTER_URL="${OPENROUTER_URL:-https://openrouter.ai/api/v1}"
 LMSTUDIO_API="${LMSTUDIO_URL}/api/v1"
 
@@ -63,6 +69,11 @@ SESSION_DIRS="projects debug file-history tasks todos plans shell-snapshots sess
 
 # Curl timeout: connect + max total (avoid hanging)
 CURL_TIMEOUT="${CURL_TIMEOUT:-10}"
+# Cloud APIs (OpenRouter, custom): longer timeout + retries (Alibaba intl. can be slow or flaky on short timeouts)
+CURL_TIMEOUT_CLOUD="${CURL_TIMEOUT_CLOUD:-25}"
+# Alibaba Cloud DashScope (Singapore / intl.): OpenAI-compatible list vs Anthropic Messages for Claude Code — see README
+DASHSCOPE_INTL_OPENAI_BASE="${DASHSCOPE_INTL_OPENAI_BASE:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}"
+DASHSCOPE_INTL_ANTHROPIC_BASE="${DASHSCOPE_INTL_ANTHROPIC_BASE:-https://dashscope-intl.aliyuncs.com/apps/anthropic}"
 
 # --- Platform detection: linux, darwin, or windows ---
 detect_platform() {
@@ -163,7 +174,7 @@ ensure_claudius_alias_in_shell_config() {
 
 # --- Append Claude Code env block to the correct config file with correct syntax ---
 # Args: shell, base_url, auth_token, api_key, backend
-# For openrouter|custom|newapi only ANTHROPIC_API_KEY; for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN (avoids Claude "auth conflict").
+# For openrouter|custom|newapi only ANTHROPIC_API_KEY; for lmstudio|ollama|llamacpp only ANTHROPIC_AUTH_TOKEN (avoids Claude "auth conflict").
 update_shell_exports() {
   local shell="${1:-bash}" base_url="$2" auth_token="${3:-}" api_key="${4:-}" backend="${5:-lmstudio}"
   local config_file marker block
@@ -182,6 +193,13 @@ update_shell_exports() {
         block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
 set -gx ANTHROPIC_API_KEY \"${api_key}\"
 set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
+      llamacpp)
+        block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
+set -gx ANTHROPIC_AUTH_TOKEN \"${auth_token}\"
+set -gx ANTHROPIC_API_KEY \"\"
+set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0
+set -gx ENABLE_TOOL_SEARCH true
+set -gx CLAUDE_CODE_AUTO_COMPACT_WINDOW 100000" ;;
       *)
         block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
 set -gx ANTHROPIC_AUTH_TOKEN \"${auth_token}\"
@@ -193,6 +211,13 @@ set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
         block="export ANTHROPIC_BASE_URL=\"${base_url}\"
 export ANTHROPIC_API_KEY=\"${api_key}\"
 export CLAUDE_CODE_ATTRIBUTION_HEADER=0" ;;
+      llamacpp)
+        block="export ANTHROPIC_BASE_URL=\"${base_url}\"
+export ANTHROPIC_AUTH_TOKEN=\"${auth_token}\"
+export ANTHROPIC_API_KEY=\"\"
+export CLAUDE_CODE_ATTRIBUTION_HEADER=0
+export ENABLE_TOOL_SEARCH=true
+export CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000" ;;
       *)
         block="export ANTHROPIC_BASE_URL=\"${base_url}\"
 export ANTHROPIC_AUTH_TOKEN=\"${auth_token}\"
@@ -347,6 +372,30 @@ check_required_commands() {
   return 1
 }
 
+# --- Auth token for llamacpp: prefs authToken if key exists, else default lmstudio; explicit "" means no Bearer ---
+get_llamacpp_auth_from_prefs() {
+  if [[ ! -f "$CLAUDIUS_PREFS" ]]; then
+    echo "lmstudio"
+    return
+  fi
+  if command -v jq &>/dev/null; then
+    if jq -e 'has("authToken")' "$CLAUDIUS_PREFS" &>/dev/null; then
+      jq -r '.authToken // ""' "$CLAUDIUS_PREFS"
+      return
+    fi
+    echo "lmstudio"
+    return
+  fi
+  python3 -c "
+import json
+try:
+    d = json.load(open('$CLAUDIUS_PREFS'))
+    print(d['authToken'] if 'authToken' in d else 'lmstudio')
+except Exception:
+    print('lmstudio')
+" 2>/dev/null || echo "lmstudio"
+}
+
 # --- Backend: read/save from prefs (backend, baseUrl, apiKey) ---
 get_pref() {
   local key="$1"
@@ -362,23 +411,42 @@ get_pref() {
 }
 
 # Merge new keys into existing prefs JSON (preserves showTurnDuration, keepSessionOnExit, etc.)
+# Optional 4th arg: authToken (for llamacpp). If omitted, existing .authToken is left unchanged.
 merge_prefs() {
   local backend="$1" base_url="$2" api_key="${3:-}"
   mkdir -p "$(dirname "$CLAUDIUS_PREFS")"
   if [[ ! -f "$CLAUDIUS_PREFS" ]]; then
+    local at="${4:-}"
     if command -v jq &>/dev/null; then
-      jq -n --arg b "$backend" --arg u "$base_url" --arg k "$api_key" \
-        '{backend: $b, baseUrl: $u, apiKey: $k, showTurnDuration: true, keepSessionOnExit: true}' > "$CLAUDIUS_PREFS"
+      jq -n --arg b "$backend" --arg u "$base_url" --arg k "$api_key" --arg at "$at" \
+        '{backend: $b, baseUrl: $u, apiKey: $k, authToken: $at, showTurnDuration: true, keepSessionOnExit: true}' > "$CLAUDIUS_PREFS"
     else
-      printf '%s\n' "{\"backend\": \"$backend\", \"baseUrl\": \"$base_url\", \"apiKey\": \"$api_key\", \"showTurnDuration\": true, \"keepSessionOnExit\": true}" > "$CLAUDIUS_PREFS"
+      printf '%s\n' "{\"backend\": \"$backend\", \"baseUrl\": \"$base_url\", \"apiKey\": \"$api_key\", \"authToken\": \"$at\", \"showTurnDuration\": true, \"keepSessionOnExit\": true}" > "$CLAUDIUS_PREFS"
     fi
     return
   fi
   if command -v jq &>/dev/null; then
-    jq --arg b "$backend" --arg u "$base_url" --arg k "$api_key" \
-      '.backend = $b | .baseUrl = $u | .apiKey = $k' "$CLAUDIUS_PREFS" > "${CLAUDIUS_PREFS}.tmp" && mv "${CLAUDIUS_PREFS}.tmp" "$CLAUDIUS_PREFS"
+    if [[ $# -ge 4 ]]; then
+      jq --arg b "$backend" --arg u "$base_url" --arg k "$api_key" --arg at "$4" \
+        '.backend = $b | .baseUrl = $u | .apiKey = $k | .authToken = $at' "$CLAUDIUS_PREFS" > "${CLAUDIUS_PREFS}.tmp" && mv "${CLAUDIUS_PREFS}.tmp" "$CLAUDIUS_PREFS"
+    else
+      jq --arg b "$backend" --arg u "$base_url" --arg k "$api_key" \
+        '.backend = $b | .baseUrl = $u | .apiKey = $k' "$CLAUDIUS_PREFS" > "${CLAUDIUS_PREFS}.tmp" && mv "${CLAUDIUS_PREFS}.tmp" "$CLAUDIUS_PREFS"
+    fi
   else
-    python3 -c "
+    if [[ $# -ge 4 ]]; then
+      CLAUDIUS_MERGE_AT="$4" python3 -c "
+import json, os
+at = os.environ.get('CLAUDIUS_MERGE_AT', '')
+with open('$CLAUDIUS_PREFS') as f: d = json.load(f)
+d['backend'] = '$backend'
+d['baseUrl'] = '$base_url'
+d['apiKey'] = '$api_key'
+d['authToken'] = at
+with open('$CLAUDIUS_PREFS','w') as f: json.dump(d, f, indent=2)
+" 2>/dev/null || true
+    else
+      python3 -c "
 import json
 with open('$CLAUDIUS_PREFS') as f: d = json.load(f)
 d['backend'] = '$backend'
@@ -386,6 +454,7 @@ d['baseUrl'] = '$base_url'
 d['apiKey'] = '$api_key'
 with open('$CLAUDIUS_PREFS','w') as f: json.dump(d, f, indent=2)
 " 2>/dev/null || true
+    fi
   fi
 }
 
@@ -429,9 +498,10 @@ run_init() {
   echo "  3) OpenRouter (cloud, requires API key)"
   echo "  4) Custom (Alibaba, Kimi, DeepSeek, Groq, OpenRouter, xAI, OpenAI, or other — API key)"
   echo "  5) NewAPI (unified gateway — self‑host or cloud, https://github.com/QuantumNous/new-api)"
+  echo "  6) llama.cpp server (llama-server, OpenAI-compatible /v1; default http://127.0.0.1:8080)"
   echo ""
-  local backend_choice backend="lmstudio" base_url="$LMSTUDIO_URL" api_key=""
-  read -rp "Choose (1-5) [1]: " backend_choice
+  local backend_choice backend="lmstudio" base_url="$LMSTUDIO_URL" api_key="" auth_token_save=""
+  read -rp "Choose (1-6) [1]: " backend_choice
   backend_choice="${backend_choice:-1}"
   case "$backend_choice" in
     1) backend="lmstudio"; base_url="${LMSTUDIO_URL}"; api_key="" ;;
@@ -452,7 +522,7 @@ run_init() {
     4)
       backend="custom"
       echo "Choose custom provider (OpenAI-compatible API):"
-      echo "  1) Alibaba Cloud (DashScope) — Singapore: dashscope-intl.aliyuncs.com"
+      echo "  1) Alibaba Cloud (DashScope) — Singapore: Anthropic API base for Claude Code (${DASHSCOPE_INTL_ANTHROPIC_BASE})"
       echo "  2) Kimi (Moonshot AI) — global: api.moonshot.ai"
       echo "  3) DeepSeek — api.deepseek.com"
       echo "  4) Groq — api.groq.com/openai/v1"
@@ -465,7 +535,7 @@ run_init() {
       read -rp "Choose (1-8) [1]: " custom_choice
       custom_choice="${custom_choice:-1}"
       case "$custom_choice" in
-        1) base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1" ;;
+        1) base_url="${DASHSCOPE_INTL_ANTHROPIC_BASE}" ;;
         2) base_url="https://api.moonshot.ai/v1" ;;
         3) base_url="https://api.deepseek.com/v1" ;;
         4) base_url="https://api.groq.com/openai/v1" ;;
@@ -475,11 +545,21 @@ run_init() {
         8)
           read -rp "Custom API base URL (e.g. https://api.example.com/v1): " base_url
           ;;
-        *) base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1" ;;
+        *) base_url="${DASHSCOPE_INTL_ANTHROPIC_BASE}" ;;
       esac
       read -rp "API key: " api_key
       [[ -z "$api_key" ]] && echo "  Warning: API key empty; list models may fail." >&2
       [[ "$custom_choice" == "8" && -z "$base_url" ]] && echo "  Warning: Base URL empty; list models may fail." >&2
+      ;;
+    6)
+      backend="llamacpp"
+      read -rp "llama.cpp server base URL [http://127.0.0.1:8080]: " base_url
+      base_url="${base_url:-http://127.0.0.1:8080}"
+      local llama_tok
+      read -rp "Bearer/API token → ANTHROPIC_AUTH_TOKEN [lmstudio]: " llama_tok
+      llama_tok="${llama_tok:-lmstudio}"
+      auth_token_save="$llama_tok"
+      api_key=""
       ;;
     *) backend="lmstudio"; base_url="${LMSTUDIO_URL}"; api_key="" ;;
   esac
@@ -488,10 +568,22 @@ run_init() {
   if command -v jq &>/dev/null; then
     jq -n \
       --arg st "$show_turn_bool" --arg ks "$keep_sess_bool" \
-      --arg b "$backend" --arg u "$base_url" --arg k "$api_key" \
-      '{showTurnDuration: ($st == "true"), keepSessionOnExit: ($ks == "true"), backend: $b, baseUrl: $u, apiKey: $k}' > "$CLAUDIUS_PREFS"
+      --arg b "$backend" --arg u "$base_url" --arg k "$api_key" --arg at "$auth_token_save" \
+      '{showTurnDuration: ($st == "true"), keepSessionOnExit: ($ks == "true"), backend: $b, baseUrl: $u, apiKey: $k, authToken: $at}' > "$CLAUDIUS_PREFS"
   else
-    printf '%s\n' "{\"showTurnDuration\": $show_turn_bool, \"keepSessionOnExit\": $keep_sess_bool, \"backend\": \"$backend\", \"baseUrl\": \"$base_url\", \"apiKey\": \"$api_key\"}" > "$CLAUDIUS_PREFS"
+    CLAUDIUS_INIT_AT="$auth_token_save" python3 -c "
+import json, os
+d = {
+    'showTurnDuration': $show_turn_bool,
+    'keepSessionOnExit': $keep_sess_bool,
+    'backend': '$backend',
+    'baseUrl': '$base_url',
+    'apiKey': '$api_key',
+    'authToken': os.environ.get('CLAUDIUS_INIT_AT', ''),
+}
+with open('$CLAUDIUS_PREFS', 'w') as f:
+    json.dump(d, f, indent=2)
+" 2>/dev/null || printf '%s\n' "{\"showTurnDuration\": $show_turn_bool, \"keepSessionOnExit\": $keep_sess_bool, \"backend\": \"$backend\", \"baseUrl\": \"$base_url\", \"apiKey\": \"$api_key\", \"authToken\": \"\"}" > "$CLAUDIUS_PREFS"
   fi
   echo "  Saved. Run claudius --init again anytime to change these."
   echo ""
@@ -704,10 +796,13 @@ prompt_remote_server() {
   echo "Backend running on this server:"
   echo "  1) LM Studio (default port 1234)"
   echo "  2) Ollama (default port 11434)"
-  read -rp "Choose (1-2): " backend_num
+  echo "  3) llama.cpp server / llama-server (default port 8080)"
+  read -rp "Choose (1-3) [1]: " backend_num
+  backend_num="${backend_num:-1}"
   case "$backend_num" in
     1) CURRENT_BACKEND="lmstudio"; default_port=1234 ;;
     2) CURRENT_BACKEND="ollama";   default_port=11434 ;;
+    3) CURRENT_BACKEND="llamacpp";  default_port=8080 ;;
     *) echo "  Invalid choice. Using LM Studio (1234)."; CURRENT_BACKEND="lmstudio"; default_port=1234 ;;
   esac
   CURRENT_BASE_URL=$(normalize_remote_url "$addr" "$default_port")
@@ -718,6 +813,9 @@ prompt_remote_server() {
   case "$CURRENT_BACKEND" in
     lmstudio) CURRENT_AUTH="lmstudio" ;;
     ollama)   CURRENT_AUTH="" ;;
+    llamacpp)
+      CURRENT_AUTH=$(get_llamacpp_auth_from_prefs)
+      ;;
     *)        CURRENT_AUTH="$CURRENT_API_KEY" ;;
   esac
   merge_prefs "$CURRENT_BACKEND" "$CURRENT_BASE_URL" "$CURRENT_API_KEY"
@@ -742,18 +840,51 @@ resolve_backend() {
     case "$CURRENT_BACKEND" in
       lmstudio) CURRENT_BASE_URL="${LMSTUDIO_URL}" ;;
       ollama)   CURRENT_BASE_URL="${OLLAMA_URL}" ;;
+      llamacpp) CURRENT_BASE_URL="${LLAMA_CPP_URL}" ;;
       openrouter) CURRENT_BASE_URL="${OPENROUTER_URL}" ;;
       newapi)   ;;  # no default; user must set in prefs
       *)        CURRENT_BASE_URL="" ;;
     esac
   fi
   [[ -z "$CURRENT_API_KEY" ]] && CURRENT_API_KEY=""
-  # Auth token for Claude Code settings: LM Studio uses placeholder, others use API key
+  # Auth token for Claude Code settings: LM Studio uses placeholder; llamacpp uses prefs or env; cloud uses API key
   case "$CURRENT_BACKEND" in
     lmstudio) CURRENT_AUTH="lmstudio" ;;
     ollama)   CURRENT_AUTH="" ;;
+    llamacpp)
+      CURRENT_AUTH="${CLAUDIUS_AUTH_TOKEN:-}"
+      [[ -z "$CURRENT_AUTH" ]] && CURRENT_AUTH=$(get_llamacpp_auth_from_prefs)
+      ;;
     *)       CURRENT_AUTH="$CURRENT_API_KEY" ;;
   esac
+
+  # Alibaba DashScope (intl.): Claude Code uses Anthropic Messages → ANTHROPIC_BASE_URL must be .../apps/anthropic (not .../compatible-mode/v1).
+  # Model listing uses OpenAI-compatible .../compatible-mode/v1. See https://www.alibabacloud.com/help/en/model-studio/anthropic-api-messages
+  unset -v CURRENT_CUSTOM_LIST_URL 2>/dev/null || true
+  if [[ "$CURRENT_BACKEND" == "custom" ]]; then
+    if [[ "$CURRENT_BASE_URL" == *"dashscope-intl.aliyuncs.com"* ]]; then
+      if [[ "$CURRENT_BASE_URL" == *"/compatible-mode"* ]]; then
+        local dashscope_migrate_prefs=0
+        CURRENT_CUSTOM_LIST_URL="$CURRENT_BASE_URL"
+        if [[ -z "${CLAUDIUS_BACKEND:-}" && -z "${CLAUDIUS_BASE_URL:-}" && -f "$CLAUDIUS_PREFS" ]]; then
+          local saved_base
+          saved_base=$(get_pref "baseUrl")
+          [[ "$saved_base" == *"/compatible-mode"* ]] && dashscope_migrate_prefs=1
+        fi
+        CURRENT_BASE_URL="$DASHSCOPE_INTL_ANTHROPIC_BASE"
+        if [[ "$dashscope_migrate_prefs" -eq 1 ]]; then
+          merge_prefs "custom" "$CURRENT_BASE_URL" "$CURRENT_API_KEY" || true
+          echo "  Updated prefs: Alibaba base URL → ${DASHSCOPE_INTL_ANTHROPIC_BASE} (Anthropic API for Claude Code). Model list: ${CURRENT_CUSTOM_LIST_URL}." >&2
+        fi
+      elif [[ "$CURRENT_BASE_URL" == *"/apps/anthropic"* ]]; then
+        CURRENT_CUSTOM_LIST_URL="$DASHSCOPE_INTL_OPENAI_BASE"
+      else
+        CURRENT_CUSTOM_LIST_URL="$CURRENT_BASE_URL"
+      fi
+    else
+      CURRENT_CUSTOM_LIST_URL="$CURRENT_BASE_URL"
+    fi
+  fi
 }
 
 # --- Check if LM Studio server is reachable ---
@@ -879,6 +1010,39 @@ wait_for_server() {
           ;;
         4) echo "Aborted."; exit 1 ;;
         *) echo "Invalid choice. Enter 1, 2, 3, or 4."; echo "" ;;
+      esac
+    done
+  elif [[ "$CURRENT_BACKEND" == "llamacpp" ]]; then
+    echo "llama.cpp server (llama-server) is not reachable at ${CURRENT_BASE_URL}."
+    echo ""
+    echo "  1) Resume       - I've started llama-server; check again."
+    echo "  2) Remote       - Use a different host/port (another machine or bind address)."
+    echo "  3) Abort        - Exit."
+    echo ""
+    local choice_llama
+    while true; do
+      read -rp "Choose (1-3): " choice_llama
+      case "$choice_llama" in
+        1)
+          if check_server_for_backend; then
+            echo "Server is up. Continuing."
+            return 0
+          fi
+          echo "Still not reachable. Start llama-server, then choose Resume."
+          echo ""
+          ;;
+        2)
+          if prompt_remote_server; then
+            if check_server_for_backend; then
+              echo "Server is up. Continuing."
+              return 0
+            fi
+            echo "Still not reachable. Check address and that llama-server is running."
+          fi
+          echo ""
+          ;;
+        3) echo "Aborted."; exit 1 ;;
+        *) echo "Invalid choice. Enter 1, 2, or 3."; echo "" ;;
       esac
     done
   else
@@ -1046,19 +1210,72 @@ except Exception:
   return 1
 }
 
+# --- llama.cpp llama-server: OpenAI-compatible GET /v1/models (optional Bearer token) ---
+check_server_llamacpp() {
+  local base_url="$1" auth_token="${2:-}"
+  local url="${base_url%/}/v1/models"
+  local code
+  if [[ -n "$auth_token" ]]; then
+    code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+      -H "Authorization: Bearer ${auth_token}" "$url" 2>/dev/null) || true
+  else
+    code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time "$CURL_TIMEOUT" "$url" 2>/dev/null) || true
+  fi
+  [[ "$code" == "200" ]]
+}
+
+fetch_models_llamacpp() {
+  local base_url="$1" auth_token="${2:-}"
+  local url="${base_url%/}/v1/models"
+  local resp
+  if [[ -n "$auth_token" ]]; then
+    resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+      -H "Authorization: Bearer ${auth_token}" "$url" 2>/dev/null) || true
+  else
+    resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" "$url" 2>/dev/null) || true
+  fi
+  if [[ -z "${resp}" ]]; then
+    echo "Error: Could not reach llama.cpp server at ${base_url}. Is llama-server running?" >&2
+    return 1
+  fi
+  if command -v jq &>/dev/null; then
+    if echo "$resp" | jq -e '.data[]?' &>/dev/null; then
+      echo "$resp" | jq -r '.data[] | "\(.id)|\(.context_length // .max_tokens // .max_context_tokens // .max_input_tokens // 32768)"'
+      return 0
+    fi
+  else
+    echo "$resp" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    for m in d.get('data', []):
+        mid = m.get('id', '')
+        ctx = m.get('context_length') or m.get('max_tokens') or m.get('max_context_tokens') or m.get('max_input_tokens') or 32768
+        if mid:
+            print(str(mid) + '|' + str(ctx))
+except Exception:
+    sys.exit(1)
+" 2>/dev/null && return 0
+  fi
+  echo "Error: Could not parse /v1/models from llama.cpp server. Response: ${resp:0:200}" >&2
+  return 1
+}
+
 # --- OpenRouter: check (GET /api/v1/models with Bearer), list models ---
 check_server_openrouter() {
   local base_url="${1:-$OPENROUTER_URL}" api_key="$2"
+  local tm="${CURL_TIMEOUT_CLOUD:-$CURL_TIMEOUT}"
   local code
-  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time "$tm" --retry 2 --retry-delay 1 \
     -H "Authorization: Bearer ${api_key}" "${base_url}/models" 2>/dev/null) || true
   [[ "$code" == "200" ]]
 }
 
 fetch_models_openrouter() {
   local base_url="${1:-$OPENROUTER_URL}" api_key="$2"
+  local tm="${CURL_TIMEOUT_CLOUD:-$CURL_TIMEOUT}"
   local resp
-  resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+  resp=$(curl -sS --connect-timeout 5 --max-time "$tm" --retry 2 --retry-delay 1 \
     -H "Authorization: Bearer ${api_key}" "${base_url}/models" 2>/dev/null) || true
   if [[ -z "${resp}" ]]; then
     echo "Error: Could not reach OpenRouter. Check API key and network." >&2
@@ -1088,29 +1305,50 @@ except Exception:
   return 1
 }
 
+# True if response looks like OpenAI list-models with a non-empty .data array (works with or without jq).
+custom_models_json_has_data() {
+  local resp="$1"
+  [[ -z "$resp" ]] && return 1
+  if command -v jq &>/dev/null; then
+    echo "$resp" | jq -e '.data | type == "array" and length > 0' &>/dev/null
+    return $?
+  fi
+  echo "$resp" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    dd = d.get('data')
+    sys.exit(0 if isinstance(dd, list) and len(dd) > 0 else 1)
+except Exception:
+    sys.exit(1)
+" 2>/dev/null
+}
+
 # --- Custom (OpenAI-compatible): GET base/models or base/v1/models with Bearer ---
 check_server_custom() {
   local base_url="$1" api_key="$2"
+  local tm="${CURL_TIMEOUT_CLOUD:-$CURL_TIMEOUT}"
   local url="$base_url"
   [[ "$url" != */ ]] && url="${url}/"
   local code
-  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time "$tm" --retry 2 --retry-delay 1 \
     -H "Authorization: Bearer ${api_key}" "${url}models" 2>/dev/null) || true
   if [[ "$code" == "200" ]]; then return 0; fi
-  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time "$tm" --retry 2 --retry-delay 1 \
     -H "Authorization: Bearer ${api_key}" "${url}v1/models" 2>/dev/null) || true
   [[ "$code" == "200" ]]
 }
 
 fetch_models_custom() {
   local base_url="$1" api_key="$2"
+  local tm="${CURL_TIMEOUT_CLOUD:-$CURL_TIMEOUT}"
   local url="$base_url"
   [[ "$url" != */ ]] && url="${url}/"
   local resp
-  resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+  resp=$(curl -sS --connect-timeout 5 --max-time "$tm" --retry 2 --retry-delay 1 \
     -H "Authorization: Bearer ${api_key}" "${url}models" 2>/dev/null) || true
-  if [[ -z "$resp" ]] || ! echo "$resp" | jq -e '.data' &>/dev/null 2>/dev/null; then
-    resp=$(curl -s --connect-timeout 2 --max-time "$CURL_TIMEOUT" \
+  if ! custom_models_json_has_data "$resp"; then
+    resp=$(curl -sS --connect-timeout 5 --max-time "$tm" --retry 2 --retry-delay 1 \
       -H "Authorization: Bearer ${api_key}" "${url}v1/models" 2>/dev/null) || true
   fi
   if [[ -z "${resp}" ]]; then
@@ -1190,8 +1428,9 @@ check_server_for_backend() {
   case "$CURRENT_BACKEND" in
     lmstudio)  check_server_lmstudio "$CURRENT_BASE_URL" ;;
     ollama)    check_server_ollama "$CURRENT_BASE_URL" ;;
+    llamacpp)  check_server_llamacpp "$CURRENT_BASE_URL" "$CURRENT_AUTH" ;;
     openrouter) check_server_openrouter "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
-    custom)    check_server_custom "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
+    custom)    check_server_custom "${CURRENT_CUSTOM_LIST_URL:-$CURRENT_BASE_URL}" "$CURRENT_API_KEY" ;;
     newapi)    check_server_newapi "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
     *)         check_server_lmstudio "$CURRENT_BASE_URL" ;;
   esac
@@ -1201,8 +1440,9 @@ fetch_models_for_backend() {
   case "$CURRENT_BACKEND" in
     lmstudio)  fetch_models_lmstudio "$CURRENT_BASE_URL" ;;
     ollama)    fetch_models_ollama "$CURRENT_BASE_URL" ;;
+    llamacpp)  fetch_models_llamacpp "$CURRENT_BASE_URL" "$CURRENT_AUTH" ;;
     openrouter) fetch_models_openrouter "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
-    custom)    fetch_models_custom "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
+    custom)    fetch_models_custom "${CURRENT_CUSTOM_LIST_URL:-$CURRENT_BASE_URL}" "$CURRENT_API_KEY" ;;
     newapi)    fetch_models_newapi "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
     *)         fetch_models_lmstudio "$CURRENT_BASE_URL" ;;
   esac
@@ -1533,7 +1773,7 @@ load_model_with_context() {
 
 # --- Update ~/.claude/settings.json ---
 # Args: model_id, base_url, auth_token, api_key, backend
-# For openrouter|custom only ANTHROPIC_API_KEY is set (avoids Claude Code "auth conflict"); for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN.
+# For openrouter|custom only ANTHROPIC_API_KEY is set (avoids Claude Code "auth conflict"); for lmstudio|ollama|llamacpp only ANTHROPIC_AUTH_TOKEN (llamacpp also sets compaction/tool-search defaults).
 write_settings() {
   local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}" backend="${5:-lmstudio}"
   [[ -z "$api_key" ]] && api_key="$auth_token"
@@ -1561,6 +1801,34 @@ print(json.dumps({
     \"env\": {
         \"ANTHROPIC_BASE_URL\": \"$base_url\",
         \"ANTHROPIC_API_KEY\": \"$api_key\"
+    },
+    \"defaultModel\": \"$model_id\",
+    \"showTurnDuration\": ($show_turn == \"true\")
+}, indent=2))
+" > "$tmp"
+      fi ;;
+    llamacpp)
+      if command -v jq &>/dev/null; then
+        jq -n \
+          --arg schema "$schema" \
+          --arg base "$base_url" \
+          --arg auth "$auth_token" \
+          --arg model "$model_id" \
+          --arg show_turn "$show_turn" \
+          '{"$schema": $schema, "env": {"ANTHROPIC_BASE_URL": $base, "ANTHROPIC_AUTH_TOKEN": $auth, "ANTHROPIC_API_KEY": "", "CLAUDE_CODE_ATTRIBUTION_HEADER": "0", "ENABLE_TOOL_SEARCH": "true", "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "100000"}, "defaultModel": $model, "showTurnDuration": ($show_turn == "true")}' \
+          > "$tmp"
+      else
+        python3 -c "
+import json
+print(json.dumps({
+    \"\$schema\": \"$schema\",
+    \"env\": {
+        \"ANTHROPIC_BASE_URL\": \"$base_url\",
+        \"ANTHROPIC_AUTH_TOKEN\": \"$auth_token\",
+        \"ANTHROPIC_API_KEY\": \"\",
+        \"CLAUDE_CODE_ATTRIBUTION_HEADER\": \"0\",
+        \"ENABLE_TOOL_SEARCH\": \"true\",
+        \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"100000\"
     },
     \"defaultModel\": \"$model_id\",
     \"showTurnDuration\": ($show_turn == \"true\")
@@ -1601,7 +1869,7 @@ print(json.dumps({
 
 # --- Verify config and export env for this process ---
 # Args: model_id, base_url, auth_token, api_key, backend
-# For openrouter|custom only export ANTHROPIC_API_KEY; for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN (avoids Claude "auth conflict").
+# For openrouter|custom only export ANTHROPIC_API_KEY; for lmstudio|ollama only ANTHROPIC_AUTH_TOKEN; llamacpp adds tool search + compaction window defaults.
 verify_and_export() {
   local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}" backend="${5:-lmstudio}"
   [[ -z "$api_key" ]] && api_key="$auth_token"
@@ -1611,6 +1879,13 @@ verify_and_export() {
     openrouter|custom|newapi)
       unset -v ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
       export ANTHROPIC_API_KEY="$api_key"
+      ;;
+    llamacpp)
+      unset -v ANTHROPIC_API_KEY 2>/dev/null || true
+      export ANTHROPIC_API_KEY=""
+      export ANTHROPIC_AUTH_TOKEN="$auth_token"
+      export ENABLE_TOOL_SEARCH="true"
+      export CLAUDE_CODE_AUTO_COMPACT_WINDOW="100000"
       ;;
     *)
       unset -v ANTHROPIC_API_KEY 2>/dev/null || true
@@ -1637,6 +1912,12 @@ verify_and_export() {
   echo "  ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"
   case "$backend" in
     openrouter|custom|newapi) echo "  ANTHROPIC_API_KEY=<set>" ;;
+    llamacpp)
+      echo "  ANTHROPIC_AUTH_TOKEN=<set>"
+      echo "  ANTHROPIC_API_KEY=(empty)"
+      echo "  ENABLE_TOOL_SEARCH=true"
+      echo "  CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000"
+      ;;
     *) echo "  ANTHROPIC_AUTH_TOKEN=<set>" ;;
   esac
   echo "  defaultModel (for this run)= $model_id"
