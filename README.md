@@ -3,7 +3,7 @@
 [![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?style=flat&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Claudius is a multi-backend bootstrapper for [Claude Code](https://code.claude.com/) (Anthropic’s agentic CLI). It connects Claude Code to **LM Studio**, **Ollama**, **llama.cpp** (`llama-server`), **OpenRouter**, **Custom** (e.g. Alibaba DashScope, Kimi, DeepSeek), or **NewAPI**. Supports Linux, macOS, and Windows (Git Bash/WSL). Writes env vars to your shell config (bash, zsh, fish, ksh, sh) automatically.
+Claudius is a multi-backend bootstrapper for [Claude Code](https://code.claude.com/) (Anthropic’s agentic CLI). It connects Claude Code to **LM Studio**, **Ollama**, **llama.cpp** (`llama-server`), **OpenRouter**, **Custom** (e.g. Alibaba DashScope, Kimi, DeepSeek), or **NewAPI**. Supports Linux, macOS, and Windows (**native:** `claudius.bat` + `claudius.ps1`; **Git Bash/WSL:** `claudius.sh`). On Unix, writes env vars to your shell config (bash, zsh, fish, ksh, sh) automatically; on Windows, writes `%USERPROFILE%\.claude\settings.json` (same keys as `~/.claude/settings.json`).
 
 **Author:** Lefteris Iliadis ([Somnius](https://github.com/Somnius))  
 **License:** [MIT](LICENSE)
@@ -14,7 +14,7 @@ Claudius is a multi-backend bootstrapper for [Claude Code](https://code.claude.c
 
 Claude Code always calls the **Anthropic Messages** API: it takes `ANTHROPIC_BASE_URL` and requests **`/v1/messages`** under that host. If the base URL already ends with `/v1` (or points at the wrong product surface), the real URL becomes wrong (e.g. **`…/v1/v1/messages`**) or hits an endpoint that does not implement Messages. The model **catalog** can still work, because many providers expose **`GET …/v1/models`** on a different path — so you get a long model list, then silence in chat.
 
-| Backend | Typical mistake | What Claudius does (0.9.8+) |
+| Backend | Typical mistake | What Claudius does (0.9.9+) |
 |--------|------------------|------------------------------|
 | **OpenRouter** | `ANTHROPIC_BASE_URL=https://openrouter.ai/api/v1` and/or auth via `ANTHROPIC_API_KEY` only | Uses **`https://openrouter.ai/api`** (no trailing `/v1`), **`ANTHROPIC_AUTH_TOKEN`** = your OpenRouter key, and **`ANTHROPIC_API_KEY=""`** exactly as in [OpenRouter’s Claude Code guide](https://openrouter.ai/docs/guides/coding-agents/claude-code-integration). Lists models from `https://openrouter.ai/api/v1/models`. Migrates old prefs that still had `…/api/v1`. |
 | **Alibaba DashScope (intl.)** | `…/compatible-mode/v1` as Claude base, or API key only in `ANTHROPIC_API_KEY` | Uses **`…/apps/anthropic`** for chat and **`…/compatible-mode/v1`** only to list models ([Alibaba docs](https://www.alibabacloud.com/help/en/model-studio/anthropic-api-messages)). Writes the Model Studio key as **`ANTHROPIC_AUTH_TOKEN`** with **`ANTHROPIC_API_KEY=""`** (same pattern as OpenRouter). |
@@ -101,6 +101,15 @@ git clone https://github.com/Somnius/Claudius-Bootstrapper.git ~/dev/Claudius-Bo
 ```
 
 Add the alias for your shell (see [SHELL-SETUP.md](SHELL-SETUP.md)), then run `claudius`. On first run you choose backend and preferences; then pick a model and (for LM Studio) context length. Claudius appends env vars to the **correct config file** for your shell (bash/zsh/fish/ksh/sh).
+
+**Windows (cmd or PowerShell):** From the repo directory, run `claudius.bat`, or invoke the script directly:
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File .\claudius.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\claudius.ps1 --init --dry-run
+```
+
+The same options as `claudius.sh` (`--init`, `--dry-run`, `--last`, `--purge`, …) work for both `claudius.bat` and `claudius.ps1`. Global config is `%USERPROFILE%\.claude\settings.json`.
 
 ---
 
@@ -220,6 +229,7 @@ Then `source ~/.bashrc` or open a new shell. For **zsh**, **fish**, **ksh**, and
 
 ## Changelog
 
+- **0.9.9** (2026-03-28) – **Windows native bootstrapper:** Added **`claudius.bat`** (cmd launcher) and **`claudius.ps1`** (PowerShell implementation, parity with `claudius.sh`). Config under **`%USERPROFILE%\.claude\`**. Run `claudius.bat` or `powershell -NoProfile -File path\to\claudius.ps1` with the same flags as the shell script (`--init`, `--dry-run`, `--last`, etc.). Renamed from earlier `claudius-windows.ps1`.
 - **0.9.8** (2026-03-22) – **llama.cpp remote UX + URL normalization:** If the server is down and you pick **Remote** while backend is **llamacpp**, the script no longer asks a second time which backend runs on the host (it stays llama.cpp / port 8080). The address prompt shows the current value; **Enter** keeps it for an easy retry. **`--init`** and loading prefs normalize llama base URLs like `192.168.x.x:8080` to **`http://192.168.x.x:8080`** so `curl` health checks and model list requests work.
 - **0.9.7** (2026-03-22) – **Alibaba DashScope auth alignment:** For **Custom** with base URL matching **DashScope** and **`/apps/anthropic`**, `~/.claude/settings.json`, shell exports, and session env now use **`ANTHROPIC_AUTH_TOKEN`** (your Model Studio API key) and **`ANTHROPIC_API_KEY=""`**, matching the OpenRouter-style third-party Anthropic pattern and restoring the intent of the older v0.9.4 GitHub branch. **Other** custom providers and **NewAPI** still use **`ANTHROPIC_API_KEY`** only. README and **CLAUDE.md** updated (env vars, auth troubleshooting, VS Code extension note).
 - **0.9.6** (2026-03-22) – **OpenRouter + Claude Code:** default base is now **`https://openrouter.ai/api`** (not `…/api/v1`). Settings and shell exports use **`ANTHROPIC_AUTH_TOKEN`** (OpenRouter key) and explicit **`ANTHROPIC_API_KEY=""`**, matching [OpenRouter’s Claude Code guide](https://openrouter.ai/docs/guides/coding-agents/claude-code-integration). Model listing uses **`GET …/api/v1/models`**. Prefs that still had `openrouter.ai/api/v1` are migrated to `…/api`. **Docs:** new section *Why Claude Code sometimes lists models but never “talks”* (wrong `/v1` / wrong auth); **llama.cpp** guidance aligned with upstream Anthropic Messages support ([HF note](https://huggingface.co/blog/ggml-org/anthropic-messages-api-in-llamacpp)).
@@ -257,7 +267,9 @@ Then `source ~/.bashrc` or open a new shell. For **zsh**, **fish**, **ksh**, and
 
 | File                    | Description                                                |
 |-------------------------|------------------------------------------------------------|
-| `claudius.sh`           | Bootstrapper script                                        |
+| `claudius.sh`           | Bootstrapper script (Linux, macOS, Git Bash, WSL)         |
+| `claudius.bat`          | Windows cmd launcher; runs `claudius.ps1`                |
+| `claudius.ps1`          | Windows PowerShell bootstrapper (same options as `claudius.sh`) |
 | [SHELL-SETUP.md](SHELL-SETUP.md) | How to add the `claudius` alias on **bash**, **zsh**, **fish**, **ksh**, and **sh** |
 | [settings.json.example](settings.json.example) | Example `~/.claude/settings.json` (LM Studio). Base URL and auth depend on backend; Claudius writes this when you pick a model. |
 | `README.md`             | This file                                                  |
