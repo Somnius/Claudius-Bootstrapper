@@ -566,7 +566,8 @@ function Select-Model {
   Write-Host "Models available ($($script:CurrentBackend)):"
   Write-Host ''
   for ($i = 0; $i -lt $keys.Count; $i++) {
-    Write-Host ([string]::Format('  {0,2}) {1} (max {2} tokens)', ($i + 1), $keys[$i], $maxs[$i]))
+    $nStr = ($i + 1).ToString().PadLeft(2)
+    Write-Host ('  ' + $nStr + ') ' + $keys[$i] + ' (max ' + $maxs[$i].ToString() + ' tokens)')
   }
   Write-Host '  q) Quit'
   Write-Host ''
