@@ -567,7 +567,8 @@ function Select-Model {
   Write-Host ''
   for ($i = 0; $i -lt $keys.Count; $i++) {
     $nStr = ($i + 1).ToString().PadLeft(2)
-    Write-Host ('  ' + $nStr + ') ' + $keys[$i] + ' (max ' + $maxs[$i].ToString() + ' tokens)')
+    # One double-quoted line only: chained '...' + ') ' + ' (max ' breaks PS parsing of ) and '.
+    Write-Host "  $($nStr)) $($keys[$i]) (max $($maxs[$i]) tokens)"
   }
   Write-Host '  q) Quit'
   Write-Host ''
