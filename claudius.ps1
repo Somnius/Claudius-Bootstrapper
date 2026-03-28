@@ -11,7 +11,7 @@ param(
   All CLI flags work the same when invoking this script directly.
 #>
 $ErrorActionPreference = 'Stop'
-$Script:Version = '0.9.11'
+$Script:Version = '0.9.12'
 $Script:ClaudeHome = Join-Path $env:USERPROFILE '.claude'
 $Script:ClaudeSettings = Join-Path $Script:ClaudeHome 'settings.json'
 $Script:ClaudiusPrefs = Join-Path $Script:ClaudeHome 'claudius-prefs.json'
@@ -651,62 +651,16 @@ function Select-ContextLength {
   }
 }
 
-function Get-RamAvailableMb {
-  try {
-    $os = Get-CimInstance Win32_OperatingSystem
-    [math]::Round($os.FreePhysicalMemory / 1024)
-  } catch { 0 }
-}
-
-function Get-NvidiaFreeMb {
-  $nv = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
-  if (-not $nv) { return @() }
-  try {
-    $csv = & nvidia-smi.exe --query-gpu=memory.free,memory.total --format=csv,noheader,nounits 2>$null
-    $lines = @()
-    foreach ($line in ($csv -split "`n")) {
-      if ($line -match '^\s*(\d+)\s*,\s*(\d+)') {
-        $lines += "NVIDIA|$($matches[1])|$($matches[2])"
-      }
-    }
-    return $lines
-  } catch { return @() }
-}
-
-function Estimate-RequiredMb {
-  param([string]$ModelKey, [int]$Context)
-  $paramB = 7
-  if ($ModelKey -match '(\d+)[bB]') { $paramB = [int]$matches[1] }
-  $modelMb = $paramB * 2048
-  $cacheMb = [math]::Floor($Context * 512 / 1024)
-  return $modelMb + $cacheMb
-}
-
-function Test-MemoryAndConfirm {
-  param([string]$ModelKey, [int]$ContextLength)
-  $ramMb = Get-RamAvailableMb
-  $gpuLines = Get-NvidiaFreeMb
-  $total = $ramMb
-  foreach ($l in $gpuLines) {
-    $p = $l.Split('|')
-    if ($p.Count -ge 2) { $total += [int]$p[1] }
-  }
-  $req = Estimate-RequiredMb $ModelKey $ContextLength
-  Write-Host ''
-  Write-Host 'Memory check:'
-  Write-Host "  System RAM available: ${ramMb} MB"
-  foreach ($l in $gpuLines) {
-    $p = $l.Split('|')
-    Write-Host "  GPU ($($p[0])): $($p[1]) MB free / $($p[2]) MB total"
-  }
-  if ($gpuLines.Count -eq 0) { Write-Host '  GPU: none detected (or nvidia-smi not in PATH)' }
-  Write-Host "  Estimated need for this model + context: ~$req MB"
-  Write-Host ''
-  if ($total -ge $req) { return $true }
-  Write-Host 'NOTICE: Estimated need may exceed available memory. Load may fail.' -ForegroundColor Yellow
-  $a = Read-Host 'Proceed anyway? [y/N]'
-  return ($a -match '^(y|yes)$')
-}
+# -----------------------------------------------------------------------------
+# RAM/GPU memory pre-check — intentionally not implemented on Windows
+# -----------------------------------------------------------------------------
+# Removed (v0.9.12): Get-RamAvailableMb, Get-NvidiaFreeMb, Estimate-RequiredMb,
+# Test-MemoryAndConfirm. That block mixed WMI, nvidia-smi CSV, regex + $matches,
+# and pipe-delimited strings in ways that led to fragile parsing (cascade parse
+# errors on PowerShell 5.1 and 7). Pre-check exists on Linux/macOS in claudius.sh.
+# On Windows we load the model in LM Studio as before; if VRAM/RAM is insufficient,
+# the load API fails — check LM Studio logs. See README changelog 0.9.12.
+# -----------------------------------------------------------------------------
 
 function Write-SettingsJson {
   param([string]$ModelId, [string]$BaseUrl, [string]$AuthToken, [string]$ApiKey, [string]$Backend)
@@ -1178,7 +1132,6 @@ function Main {
     if ($skipLoad) {
       Write-Host "  Using already-loaded model $modelId with context $contextLength (no reload)."
     } else {
-      if (-not (Test-MemoryAndConfirm $modelId $contextLength)) { exit 1 }
       Write-Host 'Loading model in LM Studio...'
       if (-not (Load-LmStudioModel -ModelKey $modelId -ContextLength $contextLength -ApiBase $apiBase)) {
         Write-Host 'Model load failed. Check LM Studio logs (memory, missing file).' -ForegroundColor Red
