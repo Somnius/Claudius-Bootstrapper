@@ -242,11 +242,21 @@ function Resolve-Backend {
   $script:CurrentApiKey = if ($env:CLAUDIUS_API_KEY) { $env:CLAUDIUS_API_KEY } else { (Get-Pref 'apiKey') }
   if ([string]::IsNullOrWhiteSpace($script:CurrentBaseUrl)) {
     switch ($script:CurrentBackend) {
-      'lmstudio' { $script:CurrentBaseUrl = $Script:LmStudioUrl }
-      'ollama'   { $script:CurrentBaseUrl = $Script:OllamaUrl }
-      'llamacpp' { $script:CurrentBaseUrl = $Script:LlamaCppUrl }
-      'openrouter' { $script:CurrentBaseUrl = $Script:OpenRouterUrl }
-      default { $script:CurrentBaseUrl = '' }
+      'lmstudio' {
+        $script:CurrentBaseUrl = $Script:LmStudioUrl
+      }
+      'ollama' {
+        $script:CurrentBaseUrl = $Script:OllamaUrl
+      }
+      'llamacpp' {
+        $script:CurrentBaseUrl = $Script:LlamaCppUrl
+      }
+      'openrouter' {
+        $script:CurrentBaseUrl = $Script:OpenRouterUrl
+      }
+      default {
+        $script:CurrentBaseUrl = ''
+      }
     }
   }
   if ($script:CurrentBackend -eq 'llamacpp' -and $script:CurrentBaseUrl -and $script:CurrentBaseUrl -notmatch '^https?://') {
@@ -466,7 +476,7 @@ function Get-ModelsForBackend {
     'lmstudio'  { Fetch-ModelsLmStudio $script:CurrentBaseUrl }
     'ollama'    { Fetch-ModelsOllama $script:CurrentBaseUrl }
     'llamacpp'  { Fetch-ModelsLlamaCpp $script:CurrentBaseUrl $script:CurrentAuth }
-    'openrouter'{ Fetch-ModelsOpenRouter $script:CurrentBaseUrl $script:CurrentApiKey }
+    'openrouter' { Fetch-ModelsOpenRouter $script:CurrentBaseUrl $script:CurrentApiKey }
     'custom'    {
       $listBase = if ($script:CurrentCustomListUrl) { $script:CurrentCustomListUrl } else { $script:CurrentBaseUrl }
       Fetch-ModelsCustom $listBase $script:CurrentApiKey
@@ -567,7 +577,7 @@ function Select-Model {
   Write-Host ''
   for ($i = 0; $i -lt $keys.Count; $i++) {
     $nStr = ($i + 1).ToString().PadLeft(2)
-    # One double-quoted line only: chained '...' + ') ' + ' (max ' breaks PS parsing of ) and '.
+    # Menu line uses one expandable string; do not chain quoted fragments with parens (PS 5.1).
     Write-Host "  $($nStr)) $($keys[$i]) (max $($maxs[$i]) tokens)"
   }
   Write-Host '  q) Quit'
