@@ -11,7 +11,7 @@ param(
   All CLI flags work the same when invoking this script directly.
 #>
 $ErrorActionPreference = 'Stop'
-$Script:Version = '0.9.10'
+$Script:Version = '0.9.11'
 $Script:ClaudeHome = Join-Path $env:USERPROFILE '.claude'
 $Script:ClaudeSettings = Join-Path $Script:ClaudeHome 'settings.json'
 $Script:ClaudiusPrefs = Join-Path $Script:ClaudeHome 'claudius-prefs.json'
@@ -552,7 +552,7 @@ function Select-Model {
   }
   $keys = @(); $maxs = @()
   foreach ($ln in $lines) {
-    # Use .Split('|') not -split '\|' — in PS single quotes '\|' breaks parsing ('\' ends string, | becomes pipeline).
+    # Pipe-delimited lines: use .Split with the pipe char. Avoid -split with regex using backslash before pipe inside single-quote literals; that breaks PS 5.1 and PS 7 parsing even in comments.
     $p = $ln.Split([char]'|', 2)
     $keys += $p[0]
     $maxs += if ($p.Count -gt 1) { [int]$p[1] } else { 32768 }
