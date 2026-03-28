@@ -1,17 +1,17 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 param(
   [Parameter(ValueFromRemainingArguments = $true)]
   [string[]]$RemainingArguments = @()
 )
 <#
 .SYNOPSIS
-  Claudius for Windows — Claude Code multi-backend bootstrapper (parity with claudius.sh).
+  Claudius for Windows - Claude Code multi-backend bootstrapper (parity with claudius.sh).
   Config: %USERPROFILE%\.claude\settings.json and claudius-prefs.json
   Run via: claudius.bat, or: powershell -NoProfile -File .\claudius.ps1 [--init] [--dry-run] ...
   All CLI flags work the same when invoking this script directly.
 #>
 $ErrorActionPreference = 'Stop'
-$Script:Version = '0.9.13'
+$Script:Version = '0.9.14'
 $Script:ClaudeHome = Join-Path $env:USERPROFILE '.claude'
 $Script:ClaudeSettings = Join-Path $Script:ClaudeHome 'settings.json'
 $Script:ClaudiusPrefs = Join-Path $Script:ClaudeHome 'claudius-prefs.json'
@@ -52,13 +52,27 @@ function Invoke-CurlString {
     [int]$TimeoutSec = 10,
     [int]$Retries = 0
   )
-  $curlArgs = @('-sS', '--connect-timeout', '2', '--max-time', $TimeoutSec.ToString())
-  if ($Retries -gt 0) { $curlArgs += @('--retry', $Retries.ToString(), '--retry-delay', '1') }
-  foreach ($k in $Headers.Keys) { $curlArgs += @('-H', "$k`: $($Headers[$k])") }
-  if ($Method -ne 'GET') { $curlArgs += @('-X', $Method) }
-  if ($null -ne $Body) { $curlArgs += @('-H', 'Content-Type: application/json', '-d', $Body) }
-  $curlArgs += $Url
-  & curl.exe @curlArgs 2>$null
+  # PS 5.1 + curl.exe: splatting a mixed Object[] can omit the URL ("no URL specified"). Use List[string].
+  $u = if ($null -eq $Url) { '' } else { $Url.Trim() }
+  if ([string]::IsNullOrWhiteSpace($u)) { return '' }
+  $a = New-Object 'System.Collections.Generic.List[string]'
+  foreach ($x in @('-sS', '--connect-timeout', '2', '--max-time', ([string]$TimeoutSec))) { [void]$a.Add($x) }
+  if ($Retries -gt 0) {
+    foreach ($x in @('--retry', ([string]$Retries), '--retry-delay', '1')) { [void]$a.Add($x) }
+  }
+  foreach ($k in @($Headers.Keys)) {
+    [void]$a.Add('-H')
+    [void]$a.Add(($k + ': ' + [string]$Headers[$k]))
+  }
+  if ($Method -ne 'GET') { [void]$a.Add('-X'); [void]$a.Add($Method) }
+  if ($null -ne $Body -and $Body -ne '') {
+    [void]$a.Add('-H')
+    [void]$a.Add('Content-Type: application/json')
+    [void]$a.Add('-d')
+    [void]$a.Add($Body)
+  }
+  [void]$a.Add($u)
+  & curl.exe @($a.ToArray()) 2>$null
 }
 
 function Invoke-CurlCode {
@@ -129,7 +143,7 @@ function Show-ClaudeInstallHelp {
   Write-Host 'After install, the CLI is often at:'
   Write-Host "  $env:USERPROFILE\.local\bin\claude.exe"
   Write-Host 'If `claude` is not recognized, add that folder to your user PATH, then open a new terminal.'
-  Write-Host 'Docs: https://code.claude.com/docs — Git for Windows is required for Claude Code on Windows.'
+  Write-Host 'Docs: https://code.claude.com/docs - Git for Windows is required for Claude Code on Windows.'
   Write-Host ''
 }
 
@@ -281,7 +295,7 @@ function Resolve-Backend {
       if (-not $env:CLAUDIUS_BACKEND -and -not $env:CLAUDIUS_BASE_URL -and $saved -like '*compatible-mode*') {
         $script:CurrentBaseUrl = $Script:DashAnthropic
         Merge-Prefs 'custom' $script:CurrentBaseUrl $script:CurrentApiKey | Out-Null
-        Write-Host "  Updated prefs: Alibaba base URL → $Script:DashAnthropic (Anthropic API for Claude Code)." -ForegroundColor DarkYellow
+        Write-Host ('  Updated prefs: Alibaba base URL -> ' + $Script:DashAnthropic + ' (Anthropic API for Claude Code).') -ForegroundColor DarkYellow
       } else {
         $script:CurrentBaseUrl = $Script:DashAnthropic
       }
@@ -297,7 +311,7 @@ function Resolve-Backend {
       if ($saved -like '*openrouter.ai/api/v1*') {
         $script:CurrentBaseUrl = 'https://openrouter.ai/api'
         Merge-Prefs 'openrouter' $script:CurrentBaseUrl $script:CurrentApiKey | Out-Null
-        Write-Host '  Updated prefs: OpenRouter base URL → https://openrouter.ai/api' -ForegroundColor DarkYellow
+        Write-Host '  Updated prefs: OpenRouter base URL -> https://openrouter.ai/api' -ForegroundColor DarkYellow
       }
     } else {
       $script:CurrentBaseUrl = 'https://openrouter.ai/api'
@@ -670,14 +684,14 @@ function Select-ContextLength {
 }
 
 # -----------------------------------------------------------------------------
-# RAM/GPU memory pre-check — intentionally not implemented on Windows
+# RAM/GPU memory pre-check - intentionally not implemented on Windows
 # -----------------------------------------------------------------------------
 # Removed (v0.9.12): Get-RamAvailableMb, Get-NvidiaFreeMb, Estimate-RequiredMb,
 # Test-MemoryAndConfirm. That block mixed WMI, nvidia-smi CSV, regex + $matches,
 # and pipe-delimited strings in ways that led to fragile parsing (cascade parse
 # errors on PowerShell 5.1 and 7). Pre-check exists on Linux/macOS in claudius.sh.
 # On Windows we load the model in LM Studio as before; if VRAM/RAM is insufficient,
-# the load API fails — check LM Studio logs. See README changelog 0.9.12.
+# the load API fails - check LM Studio logs. See README changelog 0.9.12.
 # -----------------------------------------------------------------------------
 
 function Write-SettingsJson {
@@ -839,9 +853,9 @@ function Wait-ForServer {
     if ($script:CurrentBackend -eq 'lmstudio') {
       Write-Host "LM Studio server is not running at $($script:CurrentBaseUrl)."
       Write-Host ''
-      Write-Host '  1) Resume   — server is up; check again'
-      Write-Host '  2) Start    — try: lms server start (if lms is on PATH)'
-      Write-Host '  3) Remote   — another host:port'
+      Write-Host '  1) Resume   - server is up; check again'
+      Write-Host '  2) Start    - try: lms server start (if lms is on PATH)'
+      Write-Host '  3) Remote   - another host:port'
       Write-Host '  4) Abort'
       Write-Host ''
       $ch = Read-Host 'Choose (1-4)'
@@ -922,9 +936,9 @@ function Run-Init {
   Write-Host 'Which backend should Claudius use?'
   Write-Host '  1) LM Studio (http://localhost:1234)'
   Write-Host '  2) Ollama (http://localhost:11434)'
-  Write-Host '  3) OpenRouter (https://openrouter.ai/api — needs API key)'
+  Write-Host '  3) OpenRouter (https://openrouter.ai/api - needs API key)'
   Write-Host '  4) Custom (Alibaba, Kimi, DeepSeek, Groq, xAI, OpenAI, Other)'
-  Write-Host '  5) NewAPI (gateway — self-host or cloud)'
+  Write-Host '  5) NewAPI (gateway - self-host or cloud)'
   Write-Host '  6) llama.cpp server (llama-server, default http://127.0.0.1:8080)'
   Write-Host ''
   $bc = Read-Host 'Choose (1-6) [1]'
@@ -950,14 +964,14 @@ function Run-Init {
     '4' {
       $backend = 'custom'
       Write-Host 'Custom provider:'
-      Write-Host '  1) Alibaba DashScope (intl.) — Anthropic API'
-      Write-Host '  2) Kimi — api.moonshot.ai'
+      Write-Host '  1) Alibaba DashScope (intl.) - Anthropic API'
+      Write-Host '  2) Kimi - api.moonshot.ai'
       Write-Host '  3) DeepSeek'
       Write-Host '  4) Groq'
       Write-Host '  5) OpenRouter (same as option 3)'
       Write-Host '  6) xAI'
       Write-Host '  7) OpenAI'
-      Write-Host '  8) Other — enter URL'
+      Write-Host '  8) Other - enter URL'
       $cc = Read-Host 'Choose (1-8) [1]'
       if ([string]::IsNullOrWhiteSpace($cc)) { $cc = '1' }
       switch ($cc) {
@@ -998,7 +1012,7 @@ function Run-Init {
 }
 
 function Run-Purge {
-  Write-Host "Claudius — purge session data under $Script:ClaudeHome"
+  Write-Host "Claudius - purge session data under $Script:ClaudeHome"
   Write-Host ''
   Write-Host '  1) Purge ALL session data (two confirmations)'
   Write-Host '  2) Purge last session only (~2 min)'
