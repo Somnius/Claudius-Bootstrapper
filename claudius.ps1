@@ -11,7 +11,7 @@ param(
   All CLI flags work the same when invoking this script directly.
 #>
 $ErrorActionPreference = 'Stop'
-$Script:Version = '0.9.9'
+$Script:Version = '0.9.10'
 $Script:ClaudeHome = Join-Path $env:USERPROFILE '.claude'
 $Script:ClaudeSettings = Join-Path $Script:ClaudeHome 'settings.json'
 $Script:ClaudiusPrefs = Join-Path $Script:ClaudeHome 'claudius-prefs.json'
@@ -552,7 +552,8 @@ function Select-Model {
   }
   $keys = @(); $maxs = @()
   foreach ($ln in $lines) {
-    $p = $ln -split '\|', 2
+    # Use .Split('|') not -split '\|' — in PS single quotes '\|' breaks parsing ('\' ends string, | becomes pipeline).
+    $p = $ln.Split([char]'|', 2)
     $keys += $p[0]
     $maxs += if ($p.Count -gt 1) { [int]$p[1] } else { 32768 }
   }
@@ -687,7 +688,7 @@ function Test-MemoryAndConfirm {
   $gpuLines = Get-NvidiaFreeMb
   $total = $ramMb
   foreach ($l in $gpuLines) {
-    $p = $l -split '\|'
+    $p = $l.Split('|')
     if ($p.Count -ge 2) { $total += [int]$p[1] }
   }
   $req = Estimate-RequiredMb $ModelKey $ContextLength
@@ -695,7 +696,7 @@ function Test-MemoryAndConfirm {
   Write-Host 'Memory check:'
   Write-Host "  System RAM available: ${ramMb} MB"
   foreach ($l in $gpuLines) {
-    $p = $l -split '\|'
+    $p = $l.Split('|')
     Write-Host "  GPU ($($p[0])): $($p[1]) MB free / $($p[2]) MB total"
   }
   if ($gpuLines.Count -eq 0) { Write-Host '  GPU: none detected (or nvidia-smi not in PATH)' }
@@ -1134,22 +1135,22 @@ function Main {
     if ($script:CurrentBackend -eq 'lmstudio') {
       $loaded = Get-LoadedLmStudioModel $apiBase
       if ($loaded) {
-        $pk = $loaded -split '\|'
+        $pk = $loaded.Split('|')
         if ($pk[0] -eq $modelId -and [int]$pk[1] -eq $contextLength) { $skipLoad = $true }
       }
     }
   } else {
     $sel = Select-Model
     if (-not $sel) { exit 1 }
-    $modelId = ($sel -split '\|')[0]
-    $maxCtx = [int](($sel -split '\|')[1])
+    $modelId = ($sel.Split('|'))[0]
+    $maxCtx = [int](($sel.Split('|'))[1])
     Write-Host ''
     Write-Host "Selected: $modelId (max $maxCtx tokens)"
     Write-Host ''
     if ($script:CurrentBackend -eq 'lmstudio') {
       $loaded = Get-LoadedLmStudioModel $apiBase
       if ($loaded) {
-        $pk = $loaded -split '\|'
+        $pk = $loaded.Split('|')
         if ($pk[0] -eq $modelId) {
           $cur = [int]$pk[1]
           $contextLength = Select-ContextLength -ModelKey $modelId -MaxCtx $maxCtx -CurrentCtx $cur
