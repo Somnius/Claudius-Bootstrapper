@@ -340,7 +340,7 @@ function Fetch-ModelsLmStudio {
     foreach ($m in $d.models) {
       if ($m.type -eq 'llm') {
         $mc = if ($m.max_context_length) { [int]$m.max_context_length } else { 32768 }
-        $out += "$($m.key)|$mc"
+        $out += ('{0}|{1}' -f $m.key, $mc)
       }
     }
     return $out
@@ -358,7 +358,7 @@ function Fetch-ModelsOllama {
     $d = $r | ConvertFrom-Json
     $out = @()
     foreach ($m in $d.models) {
-      if ($m.name) { $out += "$($m.name)|32768" }
+      if ($m.name) { $out += ('{0}|{1}' -f $m.name, 32768) }
     }
     return $out
   } catch { return @() }
@@ -384,7 +384,7 @@ function Fetch-ModelsLlamaCpp {
       elseif ($x.max_tokens) { $ctx = [int]$x.max_tokens }
       elseif ($x.max_context_tokens) { $ctx = [int]$x.max_context_tokens }
       elseif ($x.max_input_tokens) { $ctx = [int]$x.max_input_tokens }
-      if ($x.id) { $out += "$($x.id)|$ctx" }
+      if ($x.id) { $out += ('{0}|{1}' -f $x.id, $ctx) }
     }
     return $out
   } catch { return @() }
@@ -402,7 +402,7 @@ function Fetch-ModelsOpenRouter {
       $ctx = 32768
       if ($x.context_length) { $ctx = [int]$x.context_length }
       elseif ($x.max_tokens) { $ctx = [int]$x.max_tokens }
-      if ($x.id) { $out += "$($x.id)|$ctx" }
+      if ($x.id) { $out += ('{0}|{1}' -f $x.id, $ctx) }
     }
     return $out
   } catch { return @() }
@@ -423,7 +423,7 @@ function Fetch-ModelsCustom {
       $ctx = 32768
       if ($x.context_length) { $ctx = [int]$x.context_length }
       elseif ($x.max_tokens) { $ctx = [int]$x.max_tokens }
-      if ($x.id) { $out += "$($x.id)|$ctx" }
+      if ($x.id) { $out += ('{0}|{1}' -f $x.id, $ctx) }
     }
     return $out
   } catch { return @() }
@@ -441,13 +441,13 @@ function Fetch-ModelsNewapi {
     if ($null -eq $data) { return @() }
     if ($data -is [hashtable]) {
       foreach ($v in $data.Values) {
-        if ($v -is [System.Array]) { foreach ($name in $v) { if ($name) { $out += "$name|32768" } } }
+        if ($v -is [System.Array]) { foreach ($name in $v) { if ($name) { $out += ('{0}|{1}' -f $name, 32768) } } }
       }
     } else {
       foreach ($prop in $data.PSObject.Properties) {
         $arr = $prop.Value
         if ($arr -is [System.Array]) {
-          foreach ($name in $arr) { if ($name) { $out += "$name|32768" } }
+          foreach ($name in $arr) { if ($name) { $out += ('{0}|{1}' -f $name, 32768) } }
         }
       }
     }
@@ -499,7 +499,7 @@ function Get-LoadedLmStudioModel {
         if ($cfg.config -and $cfg.config.context_length) { $ctx = [int]$cfg.config.context_length }
         elseif ($cfg.context_length) { $ctx = [int]$cfg.context_length }
         elseif ($m.max_context_length) { $ctx = [int]$m.max_context_length }
-        return "$($m.key)|$ctx"
+        return ('{0}|{1}' -f $m.key, $ctx)
       }
     }
   } catch {}
@@ -552,7 +552,7 @@ function Select-Model {
   }
   $keys = @(); $maxs = @()
   foreach ($ln in $lines) {
-    # Pipe-delimited lines: use char 0x7C (ASCII 124). Do not use [char] plus quoted pipe — PS treats | after ] as a pipeline, not part of the cast (parse error on PS 5.1 and PS 7).
+    # Each model line is key, ASCII 124, max tokens. Split uses 0x7C only (never bare pipe after subexpr in double quotes).
     $p = $ln.Split([char]0x7C, 2)
     $keys += $p[0]
     $maxs += if ($p.Count -gt 1) { [int]$p[1] } else { 32768 }
@@ -560,7 +560,7 @@ function Select-Model {
   Write-Host "Models available ($($script:CurrentBackend)):"
   Write-Host ''
   for ($i = 0; $i -lt $keys.Count; $i++) {
-    Write-Host ("  {0,2}) {1} (max {2} tokens)" -f ($i + 1), $keys[$i], $maxs[$i])
+    Write-Host ('  {0,2}) {1} (max {2} tokens)' -f ($i + 1), $keys[$i], $maxs[$i])
   }
   Write-Host '  q) Quit'
   Write-Host ''
@@ -570,7 +570,7 @@ function Select-Model {
     if ($c -match '^\d+$') {
       $n = [int]$c
       if ($n -ge 1 -and $n -le $keys.Count) {
-        return "$($keys[$n-1])|$($maxs[$n-1])"
+        return ('{0}|{1}' -f $keys[$n - 1], $maxs[$n - 1])
       }
     }
     Write-Host 'Invalid choice.'
@@ -1089,22 +1089,22 @@ function Main {
     if ($script:CurrentBackend -eq 'lmstudio') {
       $loaded = Get-LoadedLmStudioModel $apiBase
       if ($loaded) {
-        $pk = $loaded.Split('|')
+        $pk = $loaded.Split([char]0x7C)
         if ($pk[0] -eq $modelId -and [int]$pk[1] -eq $contextLength) { $skipLoad = $true }
       }
     }
   } else {
     $sel = Select-Model
     if (-not $sel) { exit 1 }
-    $modelId = ($sel.Split('|'))[0]
-    $maxCtx = [int](($sel.Split('|'))[1])
+    $modelId = ($sel.Split([char]0x7C))[0]
+    $maxCtx = [int](($sel.Split([char]0x7C))[1])
     Write-Host ''
     Write-Host "Selected: $modelId (max $maxCtx tokens)"
     Write-Host ''
     if ($script:CurrentBackend -eq 'lmstudio') {
       $loaded = Get-LoadedLmStudioModel $apiBase
       if ($loaded) {
-        $pk = $loaded.Split('|')
+        $pk = $loaded.Split([char]0x7C)
         if ($pk[0] -eq $modelId) {
           $cur = [int]$pk[1]
           $contextLength = Select-ContextLength -ModelKey $modelId -MaxCtx $maxCtx -CurrentCtx $cur
