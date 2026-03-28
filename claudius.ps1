@@ -31,6 +31,12 @@ $script:CurrentApiKey = ''
 $script:CurrentAuth = 'lmstudio'
 $script:CurrentCustomListUrl = $null
 
+# Same as claudius.sh "key|max" lines: use ASCII 124 only via [char], never a bare | in quotes (tokenizer issues on Windows PS).
+function New-ClaudiusModelEntryString {
+  param([object]$Key, [object]$Max)
+  return (([string]$Key) + [string][char]0x7C + ([string]$Max))
+}
+
 function Write-Utf8NoBom {
   param([string]$Path, [string]$Content)
   $utf8 = New-Object System.Text.UTF8Encoding $false
@@ -340,7 +346,7 @@ function Fetch-ModelsLmStudio {
     foreach ($m in $d.models) {
       if ($m.type -eq 'llm') {
         $mc = if ($m.max_context_length) { [int]$m.max_context_length } else { 32768 }
-        $out += ('{0}|{1}' -f $m.key, $mc)
+        $out += (New-ClaudiusModelEntryString $m.key $mc)
       }
     }
     return $out
@@ -358,7 +364,7 @@ function Fetch-ModelsOllama {
     $d = $r | ConvertFrom-Json
     $out = @()
     foreach ($m in $d.models) {
-      if ($m.name) { $out += ('{0}|{1}' -f $m.name, 32768) }
+      if ($m.name) { $out += (New-ClaudiusModelEntryString $m.name 32768) }
     }
     return $out
   } catch { return @() }
@@ -384,7 +390,7 @@ function Fetch-ModelsLlamaCpp {
       elseif ($x.max_tokens) { $ctx = [int]$x.max_tokens }
       elseif ($x.max_context_tokens) { $ctx = [int]$x.max_context_tokens }
       elseif ($x.max_input_tokens) { $ctx = [int]$x.max_input_tokens }
-      if ($x.id) { $out += ('{0}|{1}' -f $x.id, $ctx) }
+      if ($x.id) { $out += (New-ClaudiusModelEntryString $x.id $ctx) }
     }
     return $out
   } catch { return @() }
@@ -402,7 +408,7 @@ function Fetch-ModelsOpenRouter {
       $ctx = 32768
       if ($x.context_length) { $ctx = [int]$x.context_length }
       elseif ($x.max_tokens) { $ctx = [int]$x.max_tokens }
-      if ($x.id) { $out += ('{0}|{1}' -f $x.id, $ctx) }
+      if ($x.id) { $out += (New-ClaudiusModelEntryString $x.id $ctx) }
     }
     return $out
   } catch { return @() }
@@ -423,7 +429,7 @@ function Fetch-ModelsCustom {
       $ctx = 32768
       if ($x.context_length) { $ctx = [int]$x.context_length }
       elseif ($x.max_tokens) { $ctx = [int]$x.max_tokens }
-      if ($x.id) { $out += ('{0}|{1}' -f $x.id, $ctx) }
+      if ($x.id) { $out += (New-ClaudiusModelEntryString $x.id $ctx) }
     }
     return $out
   } catch { return @() }
@@ -441,13 +447,13 @@ function Fetch-ModelsNewapi {
     if ($null -eq $data) { return @() }
     if ($data -is [hashtable]) {
       foreach ($v in $data.Values) {
-        if ($v -is [System.Array]) { foreach ($name in $v) { if ($name) { $out += ('{0}|{1}' -f $name, 32768) } } }
+        if ($v -is [System.Array]) { foreach ($name in $v) { if ($name) { $out += (New-ClaudiusModelEntryString $name 32768) } } }
       }
     } else {
       foreach ($prop in $data.PSObject.Properties) {
         $arr = $prop.Value
         if ($arr -is [System.Array]) {
-          foreach ($name in $arr) { if ($name) { $out += ('{0}|{1}' -f $name, 32768) } }
+          foreach ($name in $arr) { if ($name) { $out += (New-ClaudiusModelEntryString $name 32768) } }
         }
       }
     }
@@ -499,7 +505,7 @@ function Get-LoadedLmStudioModel {
         if ($cfg.config -and $cfg.config.context_length) { $ctx = [int]$cfg.config.context_length }
         elseif ($cfg.context_length) { $ctx = [int]$cfg.context_length }
         elseif ($m.max_context_length) { $ctx = [int]$m.max_context_length }
-        return ('{0}|{1}' -f $m.key, $ctx)
+        return (New-ClaudiusModelEntryString $m.key $ctx)
       }
     }
   } catch {}
@@ -560,7 +566,7 @@ function Select-Model {
   Write-Host "Models available ($($script:CurrentBackend)):"
   Write-Host ''
   for ($i = 0; $i -lt $keys.Count; $i++) {
-    Write-Host ('  {0,2}) {1} (max {2} tokens)' -f ($i + 1), $keys[$i], $maxs[$i])
+    Write-Host ([string]::Format('  {0,2}) {1} (max {2} tokens)', ($i + 1), $keys[$i], $maxs[$i]))
   }
   Write-Host '  q) Quit'
   Write-Host ''
@@ -570,7 +576,7 @@ function Select-Model {
     if ($c -match '^\d+$') {
       $n = [int]$c
       if ($n -ge 1 -and $n -le $keys.Count) {
-        return ('{0}|{1}' -f $keys[$n - 1], $maxs[$n - 1])
+        return (New-ClaudiusModelEntryString $keys[$n - 1] $maxs[$n - 1])
       }
     }
     Write-Host 'Invalid choice.'
