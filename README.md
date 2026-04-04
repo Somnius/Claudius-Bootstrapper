@@ -3,7 +3,7 @@
 [![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?style=flat&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Claudius is a multi-backend bootstrapper for [Claude Code](https://code.claude.com/) (Anthropic’s agentic CLI). It connects Claude Code to **LM Studio**, **Ollama**, **llama.cpp** (`llama-server`), **OpenRouter**, **Custom** (e.g. Alibaba DashScope, Kimi, DeepSeek), or **NewAPI**. Supports Linux, macOS, and Windows (**native:** `claudius.bat` + `claudius.ps1`; **Git Bash/WSL:** `claudius.sh`). On Unix, writes env vars to your shell config (bash, zsh, fish, ksh, sh) automatically; on Windows, writes `%USERPROFILE%\.claude\settings.json` (same keys as `~/.claude/settings.json`).
+Claudius is a multi-backend bootstrapper for [Claude Code](https://code.claude.com/) (Anthropic’s agentic CLI). It connects Claude Code to **LM Studio**, **Ollama**, **llama.cpp** (`llama-server`), **OpenRouter**, **Custom** (e.g. Alibaba DashScope, Kimi, DeepSeek), **NewAPI**, or **NVIDIA API** (NIM catalog on [integrate.api.nvidia.com](https://integrate.api.nvidia.com) — see limitations below). Supports Linux, macOS, and Windows (**native:** `claudius.bat` + `claudius.ps1`; **Git Bash/WSL:** `claudius.sh`). On Unix, writes env vars to your shell config (bash, zsh, fish, ksh, sh) automatically; on Windows, writes `%USERPROFILE%\.claude\settings.json` (same keys as `~/.claude/settings.json`).
 
 **Author:** Lefteris Iliadis ([Somnius](https://github.com/Somnius))  
 **License:** [MIT](LICENSE)
@@ -14,10 +14,11 @@ Claudius is a multi-backend bootstrapper for [Claude Code](https://code.claude.c
 
 Claude Code always calls the **Anthropic Messages** API: it takes `ANTHROPIC_BASE_URL` and requests **`/v1/messages`** under that host. If the base URL already ends with `/v1` (or points at the wrong product surface), the real URL becomes wrong (e.g. **`…/v1/v1/messages`**) or hits an endpoint that does not implement Messages. The model **catalog** can still work, because many providers expose **`GET …/v1/models`** on a different path — so you get a long model list, then silence in chat.
 
-| Backend | Typical mistake | What Claudius does (0.9.14+) |
+| Backend | Typical mistake | What Claudius does (0.9.15+) |
 |--------|------------------|------------------------------|
 | **OpenRouter** | `ANTHROPIC_BASE_URL=https://openrouter.ai/api/v1` and/or auth via `ANTHROPIC_API_KEY` only | Uses **`https://openrouter.ai/api`** (no trailing `/v1`), **`ANTHROPIC_AUTH_TOKEN`** = your OpenRouter key, and **`ANTHROPIC_API_KEY=""`** exactly as in [OpenRouter’s Claude Code guide](https://openrouter.ai/docs/guides/coding-agents/claude-code-integration). Lists models from `https://openrouter.ai/api/v1/models`. Migrates old prefs that still had `…/api/v1`. |
 | **Alibaba DashScope (intl.)** | `…/compatible-mode/v1` as Claude base, or API key only in `ANTHROPIC_API_KEY` | Uses **`…/apps/anthropic`** for chat and **`…/compatible-mode/v1`** only to list models ([Alibaba docs](https://www.alibabacloud.com/help/en/model-studio/anthropic-api-messages)). Writes the Model Studio key as **`ANTHROPIC_AUTH_TOKEN`** with **`ANTHROPIC_API_KEY=""`** (same pattern as OpenRouter). |
+| **NVIDIA API (NIM)** | Expecting `integrate.api.nvidia.com` to implement Anthropic **`POST /v1/messages`** because **`GET /v1/models`** works | NVIDIA’s [LLM API docs](https://docs.api.nvidia.com/nim/reference/llm-apis) describe **`POST /v1/chat/completions`** (OpenAI-style). Claude Code only uses **`/v1/messages`**. Claudius can **list** models with your API key; **chat with Claude Code directly against this host usually fails** (model/access errors). Use an Anthropic↔OpenAI **proxy** (e.g. LiteLLM, claude-code-proxy) as `ANTHROPIC_BASE_URL`, or use **OpenRouter** / another Anthropic-native backend. Auth for settings: **`ANTHROPIC_AUTH_TOKEN`** + **`ANTHROPIC_API_KEY=""`** (same reason as OpenRouter — avoids `/login` fallback). |
 | **Free / cheap OpenRouter models** | Same URL/auth issues as above | Fixing base + auth is required first. Some free models may be slow, rate-limited, or a poor match for agentic tool use; OpenRouter notes Claude Code is **guaranteed only with Anthropic first-party** routing — see their docs. |
 
 ### llama.cpp (`llama-server`) with Claude Code
@@ -38,14 +39,14 @@ Claudius lets you choose a backend, pick a model, and run Claude Code against it
 
 | Feature | Description |
 |--------|-------------|
-| **Backends** | **LM Studio**, **Ollama**, **OpenRouter**, **Custom**, **NewAPI**, **llama.cpp server**. Custom presets: Alibaba (DashScope), Kimi, DeepSeek, Groq, OpenRouter, xAI, OpenAI, or Other. NewAPI: [QuantumNous new-api](https://github.com/QuantumNous/new-api). **llama.cpp:** `llama-server` (local or remote). Choose once at setup or with `claudius --init`. |
-| **First-time / `--init`** | Asks: show reply duration, keep session on exit, and **which backend** (1–6). Saves to `~/.claude/claudius-prefs.json`. For OpenRouter/Custom/NewAPI/llama.cpp, prompts for API key or token and URL where needed. |
+| **Backends** | **LM Studio**, **Ollama**, **OpenRouter**, **Custom**, **NewAPI**, **llama.cpp server**, **NVIDIA API** (experimental listing / protocol caveat). Custom presets: Alibaba (DashScope), Kimi, DeepSeek, Groq, OpenRouter, xAI, OpenAI, or Other. NewAPI: [QuantumNous new-api](https://github.com/QuantumNous/new-api). **llama.cpp:** `llama-server` (local or remote). Choose once at setup or with `claudius --init`. |
+| **First-time / `--init`** | Asks: show reply duration, keep session on exit, and **which backend** (1–7). Saves to `~/.claude/claudius-prefs.json`. For OpenRouter/Custom/NewAPI/NVIDIA/llama.cpp, prompts for API key or token and URL where needed. **NVIDIA:** shows protocol warnings (OpenAI vs Anthropic). |
 | **Platform & deps** | Detects Linux/macOS/Windows and prints install hints for curl, jq, claude (e.g. apt/dnf/pacman on Linux, brew on macOS). Does not auto-install packages. |
-| **Server check** | LM Studio/Ollama: Resume / Start local / **Remote** / Abort. **llama.cpp:** Resume / Remote / Abort. **Remote:** LM Studio/Ollama flows ask for address then server type (LM Studio 1234, Ollama 11434, or llama.cpp 8080). **llama.cpp** flow only: Remote skips that menu; address prompt shows saved host (**Enter** = keep for retry). OpenRouter/Custom/NewAPI: Retry / Abort. |
-| **Model list** | LM Studio native API, Ollama `/api/tags`, OpenRouter `GET …/api/v1/models`, Custom Bearer `GET …/models`, NewAPI `GET /api/models`, llama.cpp `GET …/v1/models`. **Alibaba (intl.):** list via `compatible-mode/v1`; chat base `apps/anthropic` (see [Why no replies](#why-claude-code-sometimes-lists-models-but-never-talks)). |
+| **Server check** | LM Studio/Ollama: Resume / Start local / **Remote** / Abort. **llama.cpp:** Resume / Remote / Abort. **Remote:** LM Studio/Ollama flows ask for address then server type (LM Studio 1234, Ollama 11434, or llama.cpp 8080). **llama.cpp** flow only: Remote skips that menu; address prompt shows saved host (**Enter** = keep for retry). OpenRouter/Custom/NewAPI/NVIDIA: Retry / Abort. |
+| **Model list** | LM Studio native API, Ollama `/api/tags`, OpenRouter `GET …/api/v1/models`, Custom Bearer `GET …/models`, NewAPI `GET /api/models`, llama.cpp `GET …/v1/models`, **NVIDIA** `GET {host}/v1/models` + Bearer. **Alibaba (intl.):** list via `compatible-mode/v1`; chat base `apps/anthropic` (see [Why no replies](#why-claude-code-sometimes-lists-models-but-never-talks)). |
 | **Context length** | **LM Studio only:** loaded-model keep/change, then load with chosen context. Other backends: no load step. |
 | **Memory check** | **LM Studio only:** checks RAM/VRAM before load and warns if insufficient. |
-| **Config & shell** | Writes `~/.claude/settings.json` and shell exports. **OpenRouter:** `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_API_KEY=""` (per OpenRouter). **Alibaba DashScope** (`custom`, `…/apps/anthropic`): same pattern as OpenRouter (key in `ANTHROPIC_AUTH_TOKEN`, empty `ANTHROPIC_API_KEY`). **Other custom / NewAPI:** `ANTHROPIC_API_KEY` only. **LM Studio / Ollama:** `ANTHROPIC_AUTH_TOKEN` only. **llama.cpp:** token + empty `ANTHROPIC_API_KEY` + optional compaction/tool-search env. Ensures Claude CLI and PATH/alias as before. |
+| **Config & shell** | Writes `~/.claude/settings.json` and shell exports. **OpenRouter** and **NVIDIA API:** `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_API_KEY=""` (OpenRouter docs pattern; avoids Claude Code `/login` when using third-party hosts). **Alibaba DashScope** (`custom`, `…/apps/anthropic`): same as OpenRouter. **Other custom / NewAPI:** `ANTHROPIC_API_KEY` only. **LM Studio / Ollama:** `ANTHROPIC_AUTH_TOKEN` only. **llama.cpp:** token + empty `ANTHROPIC_API_KEY` + optional compaction/tool-search env. Ensures Claude CLI and PATH/alias as before. |
 | **Post-setup** | Prints instructions and asks "Start Claude Code now? [Y/n]". CLI is checked earlier; install is offered if missing. |
 | **Session on exit** | If you chose not to keep session history, after Claude Code exits you get a menu: delete current session, purge all (2 confirmations), or purge by age. |
 | **`--purge`** | Interactive menu to purge saved session data. Settings and Claudius prefs are never removed. |
@@ -64,9 +65,10 @@ Claudius lets you choose a backend, pick a model, and run Claude Code against it
 | **OpenRouter** | `https://openrouter.ai/api` | OpenRouter key as **`ANTHROPIC_AUTH_TOKEN`**, **`ANTHROPIC_API_KEY=""`** | Claude Code base must **not** include `/v1`. Model list: `GET https://openrouter.ai/api/v1/models`. See [OpenRouter Claude Code integration](https://openrouter.ai/docs/guides/coding-agents/claude-code-integration). |
 | **Custom** | Preset or user URL | API key (Bearer) | Presets: **Alibaba (DashScope, Singapore/intl.)**, **Kimi**, **DeepSeek**, **Groq**, **OpenRouter**, **xAI**, **OpenAI**, or **Other**. **Alibaba:** [Anthropic-compatible base](https://www.alibabacloud.com/help/en/model-studio/anthropic-api-messages) `https://dashscope-intl.aliyuncs.com/apps/anthropic`; Claudius writes your key as **`ANTHROPIC_AUTH_TOKEN`** with **`ANTHROPIC_API_KEY=""`** (same idea as OpenRouter). Model list still uses `…/compatible-mode/v1`. |
 | **NewAPI** | User (e.g. `http://localhost:8080`) | API key (Bearer) | [QuantumNous new-api](https://github.com/QuantumNous/new-api) unified gateway. Root URL in prefs; Claude Code uses `base/v1`. Model list from `GET /api/models`. |
+| **NVIDIA API** | `https://integrate.api.nvidia.com` (default; override `NVIDIA_URL` / prefs) | Key as **`ANTHROPIC_AUTH_TOKEN`**, **`ANTHROPIC_API_KEY=""`** | Lists via **`GET …/v1/models`** + Bearer ([build.nvidia.com](https://build.nvidia.com) keys). **Claude Code chat:** host documents **OpenAI** `chat/completions`, not Anthropic `messages` — see table above and [NIM LLM APIs](https://docs.api.nvidia.com/nim/reference/llm-apis). Base URL stored **without** trailing `/v1` (normalized if you paste `…/v1`). |
 | **llama.cpp** | `http://127.0.0.1:8080` (default) | `ANTHROPIC_AUTH_TOKEN` = server `--api-key` if any; `ANTHROPIC_API_KEY=""` | Use **Anthropic Messages**-capable `llama-server` ([overview](https://huggingface.co/blog/ggml-org/anthropic-messages-api-in-llamacpp)). Base URL = **origin only** (no `/v1`); you may enter `host:8080` or `http://host:8080` — Claudius normalizes to **`http://…`**. Lists models via **`GET …/v1/models`**; match token to your launch script. |
 
-Override with env: `CLAUDIUS_BACKEND`, `CLAUDIUS_BASE_URL`, `CLAUDIUS_API_KEY`, `CLAUDIUS_AUTH_TOKEN` (llama.cpp), `LMSTUDIO_URL`, `OLLAMA_URL`, `LLAMA_CPP_URL`, `OPENROUTER_URL`, `CURL_TIMEOUT_CLOUD` (longer HTTP timeout for cloud model lists, default 25s).
+Override with env: `CLAUDIUS_BACKEND`, `CLAUDIUS_BASE_URL`, `CLAUDIUS_API_KEY`, `CLAUDIUS_AUTH_TOKEN` (llama.cpp), `LMSTUDIO_URL`, `OLLAMA_URL`, `LLAMA_CPP_URL`, `OPENROUTER_URL`, `NVIDIA_URL`, `CURL_TIMEOUT_CLOUD` (longer HTTP timeout for cloud model lists, default 25s).
 
 ---
 
@@ -74,7 +76,7 @@ Override with env: `CLAUDIUS_BACKEND`, `CLAUDIUS_BASE_URL`, `CLAUDIUS_API_KEY`, 
 
 - [Claude Code](https://code.claude.com/) CLI on your PATH.
 - `curl`, and either `jq` or Python 3 for JSON.
-- **Per backend:** LM Studio (`lms`) or Ollama (`ollama`) or **llama.cpp** (`llama-server`) for local; API key for OpenRouter/Custom/NewAPI. Script prints install hints per platform (Linux/macOS/Windows).
+- **Per backend:** LM Studio (`lms`) or Ollama (`ollama`) or **llama.cpp** (`llama-server`) for local; API key for OpenRouter/Custom/NewAPI/NVIDIA. Script prints install hints per platform (Linux/macOS/Windows).
 
 ---
 
@@ -91,6 +93,7 @@ Go to **[code.claude.com/docs](https://code.claude.com/docs)** and follow the in
 - **LM Studio:** [lmstudio.ai](https://lmstudio.ai/) — install, download a model, start Local Inference Server (port 1234) or run `lms server start`.
 - **Ollama:** [ollama.com](https://ollama.com) — install, then run `ollama serve` (and pull models with `ollama pull <name>`).
 - **OpenRouter:** [openrouter.ai](https://openrouter.ai) — create an API key; Claudius will prompt for it at setup.
+- **NVIDIA API:** [build.nvidia.com](https://build.nvidia.com) — API key for cloud inference; read the **OpenAI vs Anthropic** limitation in [Why lists but no chat](#why-claude-code-sometimes-lists-models-but-never-talks) before relying on it for Claude Code.
 - **Custom (e.g. Alibaba DashScope):** Claudius preset uses the correct **Anthropic** base for Claude Code; you only need your Model Studio API key at setup.
 - **llama.cpp:** Build [llama-server](https://github.com/ggerganov/llama.cpp) with **Anthropic Messages** support; point Claudius at `http://127.0.0.1:8080` (or your bind address). Use the same API key string in Claudius as in `llama-server --api-key` when applicable.
 
@@ -123,7 +126,7 @@ Set up the alias (see [SHELL-SETUP.md](SHELL-SETUP.md)) so `claudius` runs the s
 claudius
 ```
 
-Start your backend first if local (LM Studio, Ollama, or llama-server), or when the server is not reachable choose **Remote** and enter the other machine’s address and backend type (LM Studio, Ollama, or llama.cpp). For OpenRouter/Custom ensure your API key is set. Then: choose model → for LM Studio only, choose context length and wait for load → script writes config and asks “Start Claude Code now? [Y/n]”. If you chose not to keep session history, after you exit Claude Code you get a menu to delete the current session, purge by age, or skip.
+Start your backend first if local (LM Studio, Ollama, or llama-server), or when the server is not reachable choose **Remote** and enter the other machine’s address and backend type (LM Studio, Ollama, or llama.cpp). For cloud backends (OpenRouter, Custom, NewAPI, NVIDIA) ensure your API key is set in prefs or env. Then: choose model → for LM Studio only, choose context length and wait for load → script writes config and asks “Start Claude Code now? [Y/n]”. If you chose not to keep session history, after you exit Claude Code you get a menu to delete the current session, purge by age, or skip.
 
 ### Reset preferences (first-time questions again)
 
@@ -131,7 +134,7 @@ Start your backend first if local (LM Studio, Ollama, or llama-server), or when 
 claudius --init
 ```
 
-Re-asks: show reply duration, keep session history on exit, and **which backend** (1–6). Saves to `~/.claude/claudius-prefs.json`.  
+Re-asks: show reply duration, keep session history on exit, and **which backend** (1–7). Saves to `~/.claude/claudius-prefs.json`.  
 If the script reported missing dependencies (required commands or backend app), install them, then run `claudius --init` to continue.
 
 ### Use last model and context (`--last`)
@@ -178,6 +181,10 @@ CLAUDIUS_BACKEND=ollama claudius
 CLAUDIUS_BACKEND=openrouter CLAUDIUS_BASE_URL=https://openrouter.ai/api CLAUDIUS_API_KEY=sk-or-v1-xxx claudius
 # Alibaba (intl.): Anthropic-compatible base (or omit URL and use prefs from --init)
 CLAUDIUS_BACKEND=custom CLAUDIUS_BASE_URL=https://dashscope-intl.aliyuncs.com/apps/anthropic CLAUDIUS_API_KEY=sk-xxx claudius
+# NVIDIA (listing / prefs; chat needs proxy unless your gateway implements Anthropic /v1/messages)
+CLAUDIUS_BACKEND=nvidia CLAUDIUS_API_KEY=nvapi-xxxxx claudius
+# Optional: default host https://integrate.api.nvidia.com
+NVIDIA_URL=https://integrate.api.nvidia.com claudius
 
 # Override default URLs per backend (local or remote)
 LMSTUDIO_URL=http://127.0.0.1:1234 claudius
@@ -203,7 +210,7 @@ Claudius runs the **CLI** in the terminal. To use the **Claude Code extension** 
 ]
 ```
 
-For **LM Studio** use `lmstudio` as `ANTHROPIC_AUTH_TOKEN`. For **OpenRouter** and **Alibaba DashScope** (`…/apps/anthropic`) mirror `settings.json`: `ANTHROPIC_AUTH_TOKEN` = your key, `ANTHROPIC_API_KEY` = `""`. For **other Custom** and **NewAPI** use `ANTHROPIC_API_KEY` only. Set the extension’s default model to your chosen model ID.
+For **LM Studio** use `lmstudio` as `ANTHROPIC_AUTH_TOKEN`. For **OpenRouter**, **NVIDIA API**, and **Alibaba DashScope** (`…/apps/anthropic`) mirror `settings.json`: `ANTHROPIC_AUTH_TOKEN` = your key, `ANTHROPIC_API_KEY` = `""`. For **other Custom** and **NewAPI** use `ANTHROPIC_API_KEY` only. Set the extension’s default model to your chosen model ID.
 
 ## Alias
 
@@ -225,10 +232,11 @@ Then `source ~/.bashrc` or open a new shell. For **zsh**, **fish**, **ksh**, and
 | Shell exports | **Auto-appended** to the right file for your shell (see [SHELL-SETUP.md](SHELL-SETUP.md)): `.bashrc`, `.zshrc`, `~/.config/fish/config.fish`, `.kshrc`/`.profile` |
 | Default model | `defaultModel` in settings |
 
-**Multi-shell:** Claudius detects your shell (`$SHELL` or `$CLAUDIUS_SHELL`) and appends ANTHROPIC_* vars with the correct syntax (e.g. `set -gx` for fish). **Env overrides:** `CLAUDIUS_BACKEND`, `CLAUDIUS_BASE_URL`, `CLAUDIUS_API_KEY`, `CLAUDIUS_AUTH_TOKEN` (llama.cpp), `LMSTUDIO_URL`, `OLLAMA_URL`, `LLAMA_CPP_URL`, `OPENROUTER_URL`, `CURL_TIMEOUT_CLOUD`. **Testing:** `claudius --dry-run` (or `--test`) runs server check and model selection without writing config or starting Claude.
+**Multi-shell:** Claudius detects your shell (`$SHELL` or `$CLAUDIUS_SHELL`) and appends ANTHROPIC_* vars with the correct syntax (e.g. `set -gx` for fish). **Env overrides:** `CLAUDIUS_BACKEND`, `CLAUDIUS_BASE_URL`, `CLAUDIUS_API_KEY`, `CLAUDIUS_AUTH_TOKEN` (llama.cpp), `LMSTUDIO_URL`, `OLLAMA_URL`, `LLAMA_CPP_URL`, `OPENROUTER_URL`, `NVIDIA_URL`, `CURL_TIMEOUT_CLOUD`. **Testing:** `claudius --dry-run` (or `--test`) runs server check and model selection without writing config or starting Claude. If your shell block was appended under an older backend, remove the old “Claude Code → Claudius” section so a fresh run can append the right vars (or edit by hand).
 
 ## Changelog
 
+- **0.9.15** (2026-04-04) – **NVIDIA API backend (optional):** Init/menu option **7** / `CLAUDIUS_BACKEND=nvidia`. Lists models via **`GET {host}/v1/models`** with Bearer key; default host **`https://integrate.api.nvidia.com`** (`NVIDIA_URL`). Writes **`ANTHROPIC_AUTH_TOKEN`** + **`ANTHROPIC_API_KEY=""`** (same pattern as OpenRouter) so Claude Code does not fall back to **`/login`**. **Caveat:** NVIDIA’s public NIM HTTP API documents **OpenAI** `POST /v1/chat/completions`; Claude Code uses **Anthropic** `POST /v1/messages` — listing works, **direct chat against integrate.api usually does not**; scripts print warnings; use a proxy or an Anthropic-native backend for real sessions. README: this section + troubleshooting. Parity in **`claudius.ps1`**.
 - **0.9.14** (2026-03-29) – **Windows `claudius.ps1` reliability:** **`claudius.ps1` ships with a UTF-8 BOM** so **`powershell.exe -File`** (5.1) decodes the file as UTF-8; without a BOM, UTF-8 multibyte characters (e.g. former Unicode arrows/em dashes) could be read using the system ANSI code page and **break parsing** (false “missing `}`” / bad `Write-Host` errors). User-facing strings in **`claudius.ps1`** are **ASCII-only** for the same reason. **`Invoke-CurlString`** builds **`curl.exe` args with `System.Collections.Generic.List[string]`** so splatting on PS 5.1 does not **drop the URL** (`curl: (2) no URL specified`). Also: **`New-ClaudiusModelEntryString`** for `key|max` lines, expanded **`Resolve-Backend`** `switch` blocks, single expandable string for the model menu line, spacing fix for **`'openrouter'`** in **`Get-ModelsForBackend`**.
 - **0.9.13** (2026-03-28) – **Windows `claudius.ps1`:** **Pipe split fix:** `$ln.Split([char]'|', 2)` is invalid — PowerShell treats the **`|`** after **`]`** as a **pipeline** token, not as part of a character literal, which caused “Expressions are only allowed as the first element of a pipeline” and a cascade of parse errors. Use **`[char]0x7C`** (ASCII 124) instead. **`$str.Split('|')`** with the pipe **inside** quotes is fine.
 - **0.9.12** (2026-03-28) – **Windows `claudius.ps1`:** Removed the **RAM/GPU memory pre-check** before LM Studio load (`Get-CimInstance`, `nvidia-smi`, estimates, confirm prompt). That block caused **PowerShell parse/runtime issues** on Windows; **Unix `claudius.sh` still has the full check.** On Windows, if the model does not fit memory, LM Studio load fails — use the app’s logs. Notes are in **`claudius.ps1`** above `Write-SettingsJson`.
@@ -289,23 +297,24 @@ Optional local docs (gitignored, not in the repo by default): `GUIDE-VSCODE-CLAU
 - **Windows: `curl: (2) no URL specified` from `claudius.ps1`** – Fixed in **v0.9.14**: **`Invoke-CurlString`** uses a **`List[string]`** argument list for **`curl.exe`** so Windows **PowerShell 5.1** does not omit the URL when invoking native commands. **`git pull`** and run **`claudius.bat`** again.
 - **Windows: no RAM/GPU pre-check** – **v0.9.12+** `claudius.ps1` no longer runs the memory estimate before LM Studio load (that logic remains in **`claudius.sh`** only). If load fails, reduce context or model size and check LM Studio logs.
 - **First run: “Missing required command(s)” or backend not installed** – Install the missing tools (script prints platform-specific hints: curl, jq, claude). For LM Studio install from https://lmstudio.ai; for Ollama from https://ollama.com. Then run `claudius --init` to continue.
-- **Server not running** – For LM Studio/Ollama: start the server locally or choose **Remote**, enter IP:port, and pick backend type (LM Studio 1234, Ollama 11434, or llama.cpp 8080). For **llama.cpp** with Remote: no second backend menu; **Enter** at the address prompt keeps the saved host. Then choose **Resume** to retry. For OpenRouter/Custom: check API key and network, then Retry.
+- **Server not running** – For LM Studio/Ollama: start the server locally or choose **Remote**, enter IP:port, and pick backend type (LM Studio 1234, Ollama 11434, or llama.cpp 8080). For **llama.cpp** with Remote: no second backend menu; **Enter** at the address prompt keeps the saved host. Then choose **Resume** to retry. For OpenRouter/Custom/NewAPI/NVIDIA: check API key and network, then Retry.
 - **llama.cpp “not reachable” but server is up** – Ensure the saved base URL includes **`http://`** (Claudius **0.9.8+** adds it automatically for `host:port`). Check firewall, bind address (`0.0.0.0` vs localhost), and that **`GET /v1/models`** responds (and Bearer token if you use `--api-key`).
 - **Memory check / “Proceed anyway?”** – The script estimates RAM + VRAM need from model size and context length. If you see the notice, try a smaller context length (e.g. 2048 or 34304) to avoid LM Studio load failures. GPU detection: NVIDIA uses `nvidia-smi`; AMD and Intel (including Arc) use `/sys/class/drm` when the driver exposes VRAM info; if no GPU is detected, only system RAM is considered.
 - **`lms` not found** – Add LM Studio’s CLI to PATH (e.g. `~/.lmstudio/bin`) or start the server from the GUI.
-- **No models** – LM Studio: load at least one model and ensure the server is running. Ollama: run `ollama pull <name>` and ensure `ollama serve` is running. OpenRouter/Custom: check API key and base URL; the provider’s `GET .../models` must return a list.
+- **No models** – LM Studio: load at least one model and ensure the server is running. Ollama: run `ollama pull <name>` and ensure `ollama serve` is running. OpenRouter/Custom/NewAPI/NVIDIA: check API key and base URL; the provider’s list endpoint must return models.
 - **Model load failed (HTTP 500)** – LM Studio could not load the model (e.g. out of memory, corrupt file, unsupported config). The script unloads any previously loaded model before loading; if it still fails, check **LM Studio server logs** for the exact error, try a smaller context length or another model. The script no longer continues to start Claude when load fails.
 - **`claudius` not found** – Run `source ~/.bashrc` or open a new terminal.
 - **`claude: not found` when starting** – Before checking, the script adds `~/.local/bin` to PATH (where the official installer puts `claude`), so an existing install is detected even if your current shell hasn’t loaded that path. If still missing, the script offers **Install Claude Code now? [y/N]**; say yes to run the official install script (Linux/macOS; Debian, Ubuntu, etc.). Then ensure `~/.local/bin` is in your shell config (`export PATH="$HOME/.local/bin:$PATH"`). Alternatively install from [code.claude.com/docs](https://code.claude.com/docs). Your config in `~/.claude/settings.json` is already set; you can also use the Claude Code extension in VS Code/Cursor with the same env vars.
 - **Slow or no response** – Default `CURL_TIMEOUT` is 10s; cloud model lists use `CURL_TIMEOUT_CLOUD` (default **25s**) with retries. LM Studio load can take up to 300s. Use `claudius --dry-run` to test.
 - **Alibaba / Qwen: model lists OK but Claude gets no reply** – Use **`https://dashscope-intl.aliyuncs.com/apps/anthropic`**, not `…/compatible-mode/v1`. Claudius **0.9.5+** sets this for the Alibaba preset and upgrades old prefs; run `claudius --init` if needed. **0.9.7+** also writes DashScope chat auth as **`ANTHROPIC_AUTH_TOKEN`** + empty **`ANTHROPIC_API_KEY`** (see [Why no replies](#why-claude-code-sometimes-lists-models-but-never-talks)).
 - **OpenRouter: long model list but no replies (including `:free` models)** – Base URL must be **`https://openrouter.ai/api`** (no `/v1`). Auth must be **`ANTHROPIC_AUTH_TOKEN`** with **`ANTHROPIC_API_KEY=""`**, not API-key–only. Claudius **0.9.6+** does this and migrates old `…/api/v1` prefs. After fixing, `/status` in Claude Code should show the OpenRouter base. If a free model still misbehaves, try another model or check OpenRouter activity for errors.
+- **NVIDIA: model list OK, chat says model missing / no access, or only “API Usage Billing”** – The catalog uses **`GET /v1/models`**; Claude Code sends **`POST /v1/messages`**. NVIDIA’s docs center on **`POST /v1/chat/completions`**. **Claudius cannot bridge that in the shell** — use an Anthropic-compatible proxy pointed at NVIDIA’s OpenAI API, or switch backend (e.g. OpenRouter if the model is offered there). Auth for NVIDIA in settings is **`ANTHROPIC_AUTH_TOKEN`** + empty **`ANTHROPIC_API_KEY`** (**0.9.15+**); if you still see **`/login`**, refresh `settings.json` and shell exports (remove duplicate old env block if Claudius skipped re-append).
 - **Alibaba / custom: intermittent “cannot reach” or empty model list** – Try a higher `CURL_TIMEOUT_CLOUD` (e.g. `40`). Check API key and region (intl. Singapore vs mainland may differ).
 - **Cursor (or VS Code) opens extra windows when starting Claude Code** – This comes from **Claude Code’s IDE integration**, not from Claudius. When the Claude Code extension is installed, starting the CLI (e.g. via `claudius`) can trigger the IDE to open panels or new windows. **Workaround:** run `claudius` from a terminal **outside** Cursor (e.g. a standalone terminal like GNOME Terminal, kitty, Alacritty). Alternatively, disable the Claude Code extension in Cursor when you only want terminal-only use. See [anthropics/claude-code#18205](https://github.com/anthropics/claude-code/issues/18205), [#8768](https://github.com/anthropics/claude-code/issues/8768).
 - **Base URL** – LM Studio / llama.cpp: origin only, **no** `/v1`. **OpenRouter:** `https://openrouter.ai/api` only. **Alibaba intl.:** `https://dashscope-intl.aliyuncs.com/apps/anthropic` for chat; Claudius lists via `compatible-mode/v1`.
 - **OpenRouter / Custom: “Cannot reach” or empty model list** – Check API key (and for custom, base URL). Ensure no trailing slash on base URL unless the provider requires it.
 - **Custom (e.g. Alibaba): all models show same “max 32768 tokens”** – The provider’s list-models response may not include per-model context size. Claudius shows 32768 as a fallback when the API omits `context_length`, `max_tokens`, `max_context_tokens`, or `max_input_tokens`. If your provider adds these fields to the list response, the script will display the real values.
-- **“Auth conflict” or wrong provider** – Do not mix real Anthropic credentials with a third-party base URL. **OpenRouter** requires **`ANTHROPIC_AUTH_TOKEN`** + **`ANTHROPIC_API_KEY=""`**. **Alibaba DashScope** (`…/apps/anthropic`, custom preset): same. **Other custom / NewAPI:** **`ANTHROPIC_API_KEY`** only (unset token). **LM Studio/Ollama:** **`ANTHROPIC_AUTH_TOKEN`** only (unset API key). **llama.cpp:** token + empty API key in settings. Remove stale exports from old shell blocks if you switched backends.
+- **“Auth conflict” or wrong provider** – Do not mix real Anthropic credentials with a third-party base URL. **OpenRouter** and **NVIDIA API** require **`ANTHROPIC_AUTH_TOKEN`** + **`ANTHROPIC_API_KEY=""`**. **Alibaba DashScope** (`…/apps/anthropic`, custom preset): same. **Other custom / NewAPI:** **`ANTHROPIC_API_KEY`** only (unset token). **LM Studio/Ollama:** **`ANTHROPIC_AUTH_TOKEN`** only (unset API key). **llama.cpp:** token + empty API key in settings. Remove stale exports from old shell blocks if you switched backends.
 
 ## Thanks & links
 
@@ -317,6 +326,7 @@ Claudius relies on these tools; thanks to their authors and communities.
 | [LM Studio](https://lmstudio.ai/) | Local inference — [API](https://lmstudio.ai/docs/api/endpoints/rest), [CLI](https://lmstudio.ai/docs/cli) |
 | [Ollama](https://ollama.com) | Local inference — `/api/tags` for model list |
 | [OpenRouter](https://openrouter.ai) | Cloud — [Claude Code integration](https://openrouter.ai/docs/guides/coding-agents/claude-code-integration) |
+| [NVIDIA NIM / API Catalog](https://docs.api.nvidia.com/nim/reference/llm-apis) | Cloud model listing / OpenAI-style chat (`integrate.api.nvidia.com`) |
 | [llama.cpp server](https://github.com/ggerganov/llama.cpp) | [Anthropic Messages in llama-server](https://huggingface.co/blog/ggml-org/anthropic-messages-api-in-llamacpp) |
 | **curl** | HTTP requests (list models, load for LM Studio) |
 | **jq** or **Python 3** | JSON parsing of model list |
