@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# Claudius v0.9.14 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, llama.cpp server, OpenRouter, Custom, NewAPI).
+# Claudius v0.9.15 - Claude Code multi-backend bootstrapper (LM Studio, Ollama, llama.cpp server, OpenRouter, Custom, NewAPI, NVIDIA API).
 # Author: Lefteris Iliadis (Somnius) https://github.com/Somnius
 # Check server, pick model, set context (where applicable), update config, run claude.
 # Supports: bash, zsh, fish, ksh, sh. Platforms: Linux, macOS, Windows (Git Bash/WSL).
 
 set -euo pipefail
 
-VERSION="0.9.14"
+VERSION="0.9.15"
 
 # --help function: Display usage information
 print_help() {
   cat << 'EOF'
 Usage: claudius [OPTIONS]
 
-Claudius v0.9.14 - Claude Code multi-backend bootstrapper
+Claudius v0.9.15 - Claude Code multi-backend bootstrapper
 
 Connects Claude Code (Anthropic's agentic CLI) to LM Studio, Ollama, llama.cpp server (llama-server),
-OpenRouter, Custom (many presets), or NewAPI (QuantumNous unified gateway). Custom presets: Alibaba, Kimi,
+OpenRouter, Custom (many presets), NewAPI (QuantumNous unified gateway), or NVIDIA API (NIM catalog on integrate.api.nvidia.com). Custom presets: Alibaba, Kimi,
 DeepSeek, Groq, OpenRouter, xAI, OpenAI, or Other. NewAPI: self-host or cloud; chat at base/v1, list models at base/api/models.
 Writes env vars to your shell config (bash/zsh/fish/ksh/sh).
 
@@ -30,14 +30,15 @@ Options:
   --last           Use last base URL, model, and context length; skip model menu and start Claude Code
 
 Environment Variables:
-  CLAUDIUS_BACKEND   Backend: lmstudio | ollama | llamacpp | openrouter | custom | newapi
+  CLAUDIUS_BACKEND   Backend: lmstudio | ollama | llamacpp | openrouter | custom | newapi | nvidia
   LMSTUDIO_URL       LM Studio base URL (default: http://localhost:1234)
   OLLAMA_URL         Ollama base URL (default: http://localhost:11434)
   LLAMA_CPP_URL      llama-server base URL (default: http://127.0.0.1:8080)
   CLAUDIUS_AUTH_TOKEN  Override ANTHROPIC_AUTH_TOKEN (e.g. for llamacpp; default from prefs or lmstudio)
-  CLAUDIUS_BASE_URL  Override base URL (custom, openrouter, newapi, or llamacpp)
-  CLAUDIUS_API_KEY   API key in prefs; for OpenRouter and Alibaba DashScope …/apps/anthropic (custom) written to settings as ANTHROPIC_AUTH_TOKEN with ANTHROPIC_API_KEY ""
+  CLAUDIUS_BASE_URL  Override base URL (custom, openrouter, newapi, nvidia, or llamacpp)
+  CLAUDIUS_API_KEY   API key in prefs; OpenRouter, NVIDIA API, and Alibaba DashScope …/apps/anthropic (custom) are written as ANTHROPIC_AUTH_TOKEN with ANTHROPIC_API_KEY "" (Claude Code /login workaround)
   OPENROUTER_URL     Default https://openrouter.ai/api (do not use .../api/v1 for Claude Code)
+  NVIDIA_URL         NVIDIA API host (default: https://integrate.api.nvidia.com). Listing uses GET host/v1/models; chat requires Anthropic /v1/messages, which this host does not document — use a proxy or another backend for Claude Code chat.
   CURL_TIMEOUT_CLOUD Max time (seconds) for OpenRouter/custom model-list HTTP; default 25 (default CURL_TIMEOUT is 10)
   DASHSCOPE_INTL_ANTHROPIC_BASE / DASHSCOPE_INTL_OPENAI_BASE  Override Alibaba intl. Anthropic vs OpenAI list URLs (advanced)
   CLAUDIUS_SHELL     Override shell for config file (bash|zsh|fish|ksh|sh)
@@ -64,7 +65,18 @@ OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 LLAMA_CPP_URL="${LLAMA_CPP_URL:-http://127.0.0.1:8080}"
 # Claude Code appends /v1/messages — OpenRouter requires host .../api only (NOT .../api/v1). See openrouter.ai/docs Claude Code guide.
 OPENROUTER_URL="${OPENROUTER_URL:-https://openrouter.ai/api}"
+NVIDIA_URL="${NVIDIA_URL:-https://integrate.api.nvidia.com}"
 LMSTUDIO_API="${LMSTUDIO_URL}/api/v1"
+
+# NVIDIA NIM cloud documents OpenAI POST /v1/chat/completions; Claude Code uses Anthropic POST /v1/messages (see warn below).
+warn_nvidia_claude_code_protocol() {
+  echo "" >&2
+  echo "  --- NVIDIA API + Claude Code ---" >&2
+  echo "  NVIDIA's public NIM API is OpenAI-style (POST /v1/chat/completions per docs.api.nvidia.com/nim/reference/llm-apis)." >&2
+  echo "  Claude Code uses Anthropic Messages (POST /v1/messages). Model listing (GET /v1/models) works; chat usually does not." >&2
+  echo "  Fix: use a proxy (LiteLLM, claude-code-proxy, etc.) as ANTHROPIC_BASE_URL, or a backend with native Anthropic APIs." >&2
+  echo "" >&2
+}
 
 # Session-related paths under ~/.claude to purge (do not include settings.json or claudius-prefs.json)
 SESSION_DIRS="projects debug file-history tasks todos plans shell-snapshots session-env paste-cache"
@@ -176,7 +188,7 @@ ensure_claudius_alias_in_shell_config() {
 
 # --- Append Claude Code env block to the correct config file with correct syntax ---
 # Args: shell, base_url, auth_token, api_key, backend
-# OpenRouter: ANTHROPIC_AUTH_TOKEN + empty ANTHROPIC_API_KEY (OpenRouter docs). Alibaba DashScope /apps/anthropic (custom): same pattern (imported from v0.9.4 GitHub). Other custom|newapi: API_KEY only. lmstudio|ollama|llamacpp: AUTH_TOKEN.
+# OpenRouter + NVIDIA API: ANTHROPIC_AUTH_TOKEN + empty ANTHROPIC_API_KEY (avoids Claude Code OAuth /login fallback). Alibaba DashScope /apps/anthropic (custom): same. Other custom|newapi: API_KEY only. lmstudio|ollama|llamacpp: AUTH_TOKEN.
 update_shell_exports() {
   local shell="${1:-bash}" base_url="$2" auth_token="${3:-}" api_key="${4:-}" backend="${5:-lmstudio}"
   local config_file marker block
@@ -193,7 +205,7 @@ update_shell_exports() {
   if [[ "$shell" == "fish" ]]; then
     mkdir -p "${HOME}/.config/fish"
     case "$backend" in
-      openrouter)
+      openrouter|nvidia)
         block="set -gx ANTHROPIC_BASE_URL \"${base_url}\"
 set -gx ANTHROPIC_AUTH_TOKEN \"${api_key}\"
 set -gx ANTHROPIC_API_KEY \"\"
@@ -227,7 +239,7 @@ set -gx CLAUDE_CODE_ATTRIBUTION_HEADER 0" ;;
     esac
   else
     case "$backend" in
-      openrouter)
+      openrouter|nvidia)
         block="export ANTHROPIC_BASE_URL=\"${base_url}\"
 export ANTHROPIC_AUTH_TOKEN=\"${api_key}\"
 export ANTHROPIC_API_KEY=\"\"
@@ -535,9 +547,10 @@ run_init() {
   echo "  4) Custom (Alibaba, Kimi, DeepSeek, Groq, OpenRouter, xAI, OpenAI, or other — API key)"
   echo "  5) NewAPI (unified gateway — self‑host or cloud, https://github.com/QuantumNous/new-api)"
   echo "  6) llama.cpp server (llama-server, OpenAI-compatible /v1; default http://127.0.0.1:8080)"
+  echo "  7) NVIDIA API (lists models only for most Claude Code use — host is OpenAI chat/completions, not Anthropic /messages; see note)"
   echo ""
   local backend_choice backend="lmstudio" base_url="$LMSTUDIO_URL" api_key="" auth_token_save=""
-  read -rp "Choose (1-6) [1]: " backend_choice
+  read -rp "Choose (1-7) [1]: " backend_choice
   backend_choice="${backend_choice:-1}"
   case "$backend_choice" in
     1) backend="lmstudio"; base_url="${LMSTUDIO_URL}"; api_key="" ;;
@@ -599,6 +612,17 @@ run_init() {
       llama_tok="${llama_tok:-lmstudio}"
       auth_token_save="$llama_tok"
       api_key=""
+      ;;
+    7)
+      backend="nvidia"
+      read -rp "NVIDIA API host [${NVIDIA_URL}]: " nv_host
+      nv_host="${nv_host:-$NVIDIA_URL}"
+      nv_host="${nv_host%/}"
+      [[ "$nv_host" == */v1 ]] && nv_host="${nv_host%/v1}"
+      base_url="$nv_host"
+      read -rp "NVIDIA API key (Bearer, from build.nvidia.com): " api_key
+      [[ -z "$api_key" ]] && echo "  Warning: API key empty; list models may fail." >&2
+      warn_nvidia_claude_code_protocol
       ;;
     *) backend="lmstudio"; base_url="${LMSTUDIO_URL}"; api_key="" ;;
   esac
@@ -910,6 +934,7 @@ resolve_backend() {
       ollama)   CURRENT_BASE_URL="${OLLAMA_URL}" ;;
       llamacpp) CURRENT_BASE_URL="${LLAMA_CPP_URL}" ;;
       openrouter) CURRENT_BASE_URL="${OPENROUTER_URL}" ;;
+      nvidia)     CURRENT_BASE_URL="${NVIDIA_URL}" ;;
       newapi)   ;;  # no default; user must set in prefs
       *)        CURRENT_BASE_URL="" ;;
     esac
@@ -973,6 +998,20 @@ resolve_backend() {
       if [[ "$or_migrate_prefs" -eq 1 ]]; then
         merge_prefs "openrouter" "$CURRENT_BASE_URL" "$CURRENT_API_KEY" || true
         echo "  Updated prefs: OpenRouter base URL → https://openrouter.ai/api (required for Claude Code; see OpenRouter docs)." >&2
+      fi
+    fi
+  fi
+
+  # NVIDIA: Claude Code uses ANTHROPIC_BASE_URL like https://api.anthropic.com (no trailing /v1). List models: GET {base}/v1/models.
+  if [[ "$CURRENT_BACKEND" == "nvidia" && -n "$CURRENT_BASE_URL" ]]; then
+    local nv_b="${CURRENT_BASE_URL%/}"
+    if [[ "$nv_b" == */v1 ]]; then
+      nv_b="${nv_b%/v1}"
+      CURRENT_BASE_URL="$nv_b"
+      if [[ -z "${CLAUDIUS_BASE_URL:-}" && -f "$CLAUDIUS_PREFS" ]]; then
+        local saved_nv
+        saved_nv=$(get_pref "baseUrl")
+        [[ "$saved_nv" == */v1 ]] && merge_prefs "nvidia" "$CURRENT_BASE_URL" "$CURRENT_API_KEY" || true
       fi
     fi
   fi
@@ -1409,6 +1448,51 @@ except Exception:
   return 1
 }
 
+# --- NVIDIA API (NIM catalog): GET host/v1/models with Bearer ---
+check_server_nvidia() {
+  local base_url="${1:-$NVIDIA_URL}" api_key="$2"
+  local tm="${CURL_TIMEOUT_CLOUD:-$CURL_TIMEOUT}"
+  local list_url="${base_url%/}/v1/models"
+  local code
+  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time "$tm" --retry 2 --retry-delay 1 \
+    -H "Authorization: Bearer ${api_key}" "$list_url" 2>/dev/null) || true
+  [[ "$code" == "200" ]]
+}
+
+fetch_models_nvidia() {
+  local base_url="${1:-$NVIDIA_URL}" api_key="$2"
+  local tm="${CURL_TIMEOUT_CLOUD:-$CURL_TIMEOUT}"
+  local list_url="${base_url%/}/v1/models"
+  local resp
+  resp=$(curl -sS --connect-timeout 5 --max-time "$tm" --retry 2 --retry-delay 1 \
+    -H "Authorization: Bearer ${api_key}" "$list_url" 2>/dev/null) || true
+  if [[ -z "${resp}" ]]; then
+    echo "Error: Could not reach NVIDIA API at ${base_url}. Check API key and network." >&2
+    return 1
+  fi
+  if command -v jq &>/dev/null; then
+    if echo "$resp" | jq -e '.data[]?' &>/dev/null; then
+      echo "$resp" | jq -r '.data[] | "\(.id)|\(.context_length // .max_tokens // .max_context_tokens // .max_input_tokens // 32768)"'
+      return 0
+    fi
+  else
+    echo "$resp" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    for m in d.get('data', []):
+        mid = m.get('id', '')
+        ctx = m.get('context_length') or m.get('max_tokens') or m.get('max_context_tokens') or m.get('max_input_tokens') or 32768
+        if mid:
+            print(str(mid) + '|' + str(ctx))
+except Exception:
+    sys.exit(1)
+" 2>/dev/null && return 0
+  fi
+  echo "Error: Could not parse NVIDIA API model list. Response: ${resp:0:200}" >&2
+  return 1
+}
+
 # True if response looks like OpenAI list-models with a non-empty .data array (works with or without jq).
 custom_models_json_has_data() {
   local resp="$1"
@@ -1536,6 +1620,7 @@ check_server_for_backend() {
     openrouter) check_server_openrouter "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
     custom)    check_server_custom "${CURRENT_CUSTOM_LIST_URL:-$CURRENT_BASE_URL}" "$CURRENT_API_KEY" ;;
     newapi)    check_server_newapi "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
+    nvidia)    check_server_nvidia "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
     *)         check_server_lmstudio "$CURRENT_BASE_URL" ;;
   esac
 }
@@ -1548,6 +1633,7 @@ fetch_models_for_backend() {
     openrouter) fetch_models_openrouter "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
     custom)    fetch_models_custom "${CURRENT_CUSTOM_LIST_URL:-$CURRENT_BASE_URL}" "$CURRENT_API_KEY" ;;
     newapi)    fetch_models_newapi "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
+    nvidia)    fetch_models_nvidia "$CURRENT_BASE_URL" "$CURRENT_API_KEY" ;;
     *)         fetch_models_lmstudio "$CURRENT_BASE_URL" ;;
   esac
 }
@@ -1877,7 +1963,7 @@ load_model_with_context() {
 
 # --- Update ~/.claude/settings.json ---
 # Args: model_id, base_url, auth_token, api_key, backend
-# OpenRouter: ANTHROPIC_AUTH_TOKEN + ANTHROPIC_API_KEY "". Alibaba DashScope custom /apps/anthropic: same (v0.9.4 GitHub). Other custom|newapi: API_KEY only. lmstudio|ollama|llamacpp: AUTH_TOKEN (llamacpp adds extras).
+# OpenRouter + NVIDIA: ANTHROPIC_AUTH_TOKEN + ANTHROPIC_API_KEY "". Alibaba DashScope custom /apps/anthropic: same (v0.9.4 GitHub). Other custom|newapi: API_KEY only. lmstudio|ollama|llamacpp: AUTH_TOKEN (llamacpp adds extras).
 write_settings() {
   local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}" backend="${5:-lmstudio}"
   [[ -z "$api_key" ]] && api_key="$auth_token"
@@ -1888,7 +1974,7 @@ write_settings() {
   local tmp
   tmp=$(mktemp)
   case "$backend" in
-    openrouter)
+    openrouter|nvidia)
       if command -v jq &>/dev/null; then
         jq -n \
           --arg schema "$schema" \
@@ -2050,7 +2136,7 @@ print(json.dumps({
 
 # --- Verify config and export env for this process ---
 # Args: model_id, base_url, auth_token, api_key, backend
-# OpenRouter: AUTH_TOKEN + empty API_KEY (official). Alibaba DashScope custom /apps/anthropic: same. Other custom|newapi: API_KEY. lmstudio|ollama: AUTH_TOKEN. llamacpp: same + compaction/tool-search.
+# OpenRouter + NVIDIA: AUTH_TOKEN + empty API_KEY. Alibaba DashScope custom /apps/anthropic: same. Other custom|newapi: API_KEY. lmstudio|ollama: AUTH_TOKEN. llamacpp: same + compaction/tool-search.
 verify_and_export() {
   local model_id="$1" base_url="${2:-http://localhost:1234}" auth_token="${3:-lmstudio}" api_key="${4:-}" backend="${5:-lmstudio}"
   local dashscope_anthropic=0
@@ -2059,7 +2145,7 @@ verify_and_export() {
   export ANTHROPIC_BASE_URL="$base_url"
   export CLAUDE_CODE_ATTRIBUTION_HEADER="0"
   case "$backend" in
-    openrouter)
+    openrouter|nvidia)
       unset -v ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
       unset -v ANTHROPIC_API_KEY 2>/dev/null || true
       export ANTHROPIC_AUTH_TOKEN="$api_key"
@@ -2115,6 +2201,10 @@ verify_and_export() {
       echo "  ANTHROPIC_AUTH_TOKEN=<set> (OpenRouter key)"
       echo "  ANTHROPIC_API_KEY=(empty)"
       ;;
+    nvidia)
+      echo "  ANTHROPIC_AUTH_TOKEN=<set> (NVIDIA API key)"
+      echo "  ANTHROPIC_API_KEY=(empty)"
+      ;;
     custom)
       if [[ $dashscope_anthropic -eq 1 ]]; then
         echo "  ANTHROPIC_AUTH_TOKEN=<set> (DashScope API key)"
@@ -2143,6 +2233,10 @@ print_post_setup_instructions() {
   echo "  1) Start Claude Code in this terminal now (choose below)"
   echo "  2) Use Claude in VS Code / Cursor: set claudeCode.environmentVariables to ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) from the config we wrote."
   echo "  3) Use in Forks or other IDEs: same env vars in your Claude Code integration."
+  if [[ "${CURRENT_BACKEND:-}" == "nvidia" ]]; then
+    echo ""
+    echo "  NVIDIA: if Claude reports model/access errors, the integrate.api host is not an Anthropic Messages endpoint — use a proxy or switch backend (see messages when you chose option 7)."
+  fi
   echo ""
 }
 
@@ -2198,6 +2292,7 @@ main() {
   platform=$(detect_platform)
   echo "Claudius v${VERSION} - Claude Code multi-backend (${CURRENT_BACKEND})"
   echo "Backend: $CURRENT_BACKEND @ $CURRENT_BASE_URL"
+  [[ "$CURRENT_BACKEND" == "nvidia" ]] && warn_nvidia_claude_code_protocol
   [[ "$dry_run" -eq 1 ]] && echo "(dry-run: will not write config or start claude)"
   echo ""
 

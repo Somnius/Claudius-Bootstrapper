@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 param(
   [Parameter(ValueFromRemainingArguments = $true)]
   [string[]]$RemainingArguments = @()
@@ -11,7 +11,7 @@ param(
   All CLI flags work the same when invoking this script directly.
 #>
 $ErrorActionPreference = 'Stop'
-$Script:Version = '0.9.14'
+$Script:Version = '0.9.15'
 $Script:ClaudeHome = Join-Path $env:USERPROFILE '.claude'
 $Script:ClaudeSettings = Join-Path $Script:ClaudeHome 'settings.json'
 $Script:ClaudiusPrefs = Join-Path $Script:ClaudeHome 'claudius-prefs.json'
@@ -22,6 +22,7 @@ $Script:LmStudioUrl = if ($env:LMSTUDIO_URL) { $env:LMSTUDIO_URL.TrimEnd('/') } 
 $Script:OllamaUrl = if ($env:OLLAMA_URL) { $env:OLLAMA_URL.TrimEnd('/') } else { 'http://localhost:11434' }
 $Script:LlamaCppUrl = if ($env:LLAMA_CPP_URL) { $env:LLAMA_CPP_URL.TrimEnd('/') } else { 'http://127.0.0.1:8080' }
 $Script:OpenRouterUrl = if ($env:OPENROUTER_URL) { $env:OPENROUTER_URL.TrimEnd('/') } else { 'https://openrouter.ai/api' }
+$Script:NvidiaUrl = if ($env:NVIDIA_URL) { $env:NVIDIA_URL.TrimEnd('/') } else { 'https://integrate.api.nvidia.com' }
 $Script:DashOpenAI = if ($env:DASHSCOPE_INTL_OPENAI_BASE) { $env:DASHSCOPE_INTL_OPENAI_BASE.TrimEnd('/') } else { 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1' }
 $Script:DashAnthropic = if ($env:DASHSCOPE_INTL_ANTHROPIC_BASE) { $env:DASHSCOPE_INTL_ANTHROPIC_BASE.TrimEnd('/') } else { 'https://dashscope-intl.aliyuncs.com/apps/anthropic' }
 
@@ -104,11 +105,22 @@ Options:
 
 Environment (optional):
   CLAUDIUS_BACKEND, CLAUDIUS_BASE_URL, CLAUDIUS_API_KEY, CLAUDIUS_AUTH_TOKEN
-  LMSTUDIO_URL, OLLAMA_URL, LLAMA_CPP_URL, OPENROUTER_URL
+  LMSTUDIO_URL, OLLAMA_URL, LLAMA_CPP_URL, OPENROUTER_URL, NVIDIA_URL
   CURL_TIMEOUT, CURL_TIMEOUT_CLOUD
+
+NVIDIA_URL: integrate.api.nvidia.com is OpenAI chat/completions per NVIDIA; Claude Code uses Anthropic /v1/messages. Use a proxy or another backend for chat.
 
 https://github.com/Somnius/Claudius-Bootstrapper
 "@
+}
+
+function Warn-NvidiaClaudeCodeProtocol {
+  Write-Host ''
+  Write-Host '  --- NVIDIA API + Claude Code ---' -ForegroundColor DarkYellow
+  Write-Host "  NVIDIA's public NIM API is OpenAI-style (POST /v1/chat/completions; see docs.api.nvidia.com/nim/reference/llm-apis)." -ForegroundColor DarkYellow
+  Write-Host '  Claude Code uses Anthropic Messages (POST /v1/messages). Listing models works; chat usually does not.' -ForegroundColor DarkYellow
+  Write-Host '  Use a proxy (LiteLLM, claude-code-proxy) as ANTHROPIC_BASE_URL, or OpenRouter / other Anthropic-compatible hosts.' -ForegroundColor DarkYellow
+  Write-Host ''
 }
 
 function Test-CurlAvailable {
@@ -268,6 +280,9 @@ function Resolve-Backend {
       'openrouter' {
         $script:CurrentBaseUrl = $Script:OpenRouterUrl
       }
+      'nvidia' {
+        $script:CurrentBaseUrl = $Script:NvidiaUrl
+      }
       default {
         $script:CurrentBaseUrl = ''
       }
@@ -317,6 +332,19 @@ function Resolve-Backend {
       $script:CurrentBaseUrl = 'https://openrouter.ai/api'
     }
   }
+  if ($script:CurrentBackend -eq 'nvidia' -and $script:CurrentBaseUrl) {
+    $nb = $script:CurrentBaseUrl.TrimEnd('/')
+    if ($nb -like '*/v1') {
+      $nb = $nb -replace '/v1$', ''
+      $script:CurrentBaseUrl = $nb
+      if (-not $env:CLAUDIUS_BASE_URL -and (Test-Path -LiteralPath $Script:ClaudiusPrefs)) {
+        $saved = (Get-Pref 'baseUrl')
+        if ($saved -like '*/v1') {
+          Merge-Prefs 'nvidia' $script:CurrentBaseUrl $script:CurrentApiKey | Out-Null
+        }
+      }
+    }
+  }
 }
 
 function Check-ServerLmStudio { param([string]$Base) $code = Invoke-CurlCode "$Base/api/v1/models"; return ($code -eq '200') }
@@ -349,6 +377,12 @@ function Check-ServerNewapi {
   param([string]$Base, [string]$ApiKey)
   $u = "$($Base.TrimEnd('/'))/api/models"
   $code = & curl.exe -sS -o NUL -w '%{http_code}' --connect-timeout 2 --max-time $Script:CurlTimeout -H "Authorization: Bearer $ApiKey" $u 2>$null
+  return ($code -eq '200')
+}
+function Check-ServerNvidia {
+  param([string]$Base, [string]$ApiKey)
+  $u = "$($Base.TrimEnd('/'))/v1/models"
+  $code = & curl.exe -sS -o NUL -w '%{http_code}' --connect-timeout 5 --max-time $Script:CurlTimeoutCloud --retry 2 --retry-delay 1 -H "Authorization: Bearer $ApiKey" $u 2>$null
   return ($code -eq '200')
 }
 
@@ -485,6 +519,32 @@ function Fetch-ModelsNewapi {
   } catch { return @() }
 }
 
+function Fetch-ModelsNvidia {
+  param([string]$Base, [string]$ApiKey)
+  $u = "$($Base.TrimEnd('/'))/v1/models"
+  $r = & curl.exe -sS --connect-timeout 5 --max-time $Script:CurlTimeoutCloud --retry 2 --retry-delay 1 -H "Authorization: Bearer $ApiKey" $u 2>$null
+  if ([string]::IsNullOrWhiteSpace($r)) {
+    Write-Host "Error: Could not reach NVIDIA API at $Base." -ForegroundColor Red
+    return @()
+  }
+  try {
+    $d = $r | ConvertFrom-Json
+    $out = @()
+    foreach ($x in $d.data) {
+      $ctx = 32768
+      if ($x.context_length) { $ctx = [int]$x.context_length }
+      elseif ($x.max_tokens) { $ctx = [int]$x.max_tokens }
+      elseif ($x.max_context_tokens) { $ctx = [int]$x.max_context_tokens }
+      elseif ($x.max_input_tokens) { $ctx = [int]$x.max_input_tokens }
+      if ($x.id) { $out += (New-ClaudiusModelEntryString $x.id $ctx) }
+    }
+    return $out
+  } catch {
+    Write-Host 'Error: Could not parse NVIDIA API model list.' -ForegroundColor Red
+    return @()
+  }
+}
+
 function Get-ModelsForBackend {
   switch ($script:CurrentBackend) {
     'lmstudio'  { Fetch-ModelsLmStudio $script:CurrentBaseUrl }
@@ -496,6 +556,7 @@ function Get-ModelsForBackend {
       Fetch-ModelsCustom $listBase $script:CurrentApiKey
     }
     'newapi'    { Fetch-ModelsNewapi $script:CurrentBaseUrl $script:CurrentApiKey }
+    'nvidia'    { Fetch-ModelsNvidia $script:CurrentBaseUrl $script:CurrentApiKey }
     default     { Fetch-ModelsLmStudio $script:CurrentBaseUrl }
   }
 }
@@ -511,6 +572,7 @@ function Test-ServerForBackend {
       Check-ServerCustom $listBase $script:CurrentApiKey
     }
     'newapi'     { Check-ServerNewapi $script:CurrentBaseUrl $script:CurrentApiKey }
+    'nvidia'     { Check-ServerNvidia $script:CurrentBaseUrl $script:CurrentApiKey }
     default      { Check-ServerLmStudio $script:CurrentBaseUrl }
   }
 }
@@ -717,6 +779,12 @@ function Write-SettingsJson {
       $envBlock['ANTHROPIC_API_KEY'] = ''
       $envBlock['CLAUDE_CODE_ATTRIBUTION_HEADER'] = '0'
     }
+    'nvidia' {
+      $envBlock['ANTHROPIC_BASE_URL'] = $BaseUrl
+      $envBlock['ANTHROPIC_AUTH_TOKEN'] = $apik
+      $envBlock['ANTHROPIC_API_KEY'] = ''
+      $envBlock['CLAUDE_CODE_ATTRIBUTION_HEADER'] = '0'
+    }
     'custom' {
       if ($dashAnthropic) {
         $envBlock['ANTHROPIC_BASE_URL'] = $BaseUrl
@@ -766,6 +834,10 @@ function Set-VerifyEnv {
   Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
   switch ($Backend) {
     'openrouter' {
+      $env:ANTHROPIC_AUTH_TOKEN = $apik
+      $env:ANTHROPIC_API_KEY = ''
+    }
+    'nvidia' {
       $env:ANTHROPIC_AUTH_TOKEN = $apik
       $env:ANTHROPIC_API_KEY = ''
     }
@@ -940,8 +1012,9 @@ function Run-Init {
   Write-Host '  4) Custom (Alibaba, Kimi, DeepSeek, Groq, xAI, OpenAI, Other)'
   Write-Host '  5) NewAPI (gateway - self-host or cloud)'
   Write-Host '  6) llama.cpp server (llama-server, default http://127.0.0.1:8080)'
+  Write-Host '  7) NVIDIA API (listing works; host is OpenAI chat not Anthropic /messages - see warning)'
   Write-Host ''
-  $bc = Read-Host 'Choose (1-6) [1]'
+  $bc = Read-Host 'Choose (1-7) [1]'
   if ([string]::IsNullOrWhiteSpace($bc)) { $bc = '1' }
   $backend = 'lmstudio'
   $baseUrl = $Script:LmStudioUrl
@@ -995,6 +1068,16 @@ function Run-Init {
       if (-not $baseUrl) { $baseUrl = 'http://127.0.0.1:8080' }
       $authTok = Read-Host 'Bearer token for ANTHROPIC_AUTH_TOKEN [lmstudio]'
       if ([string]::IsNullOrWhiteSpace($authTok)) { $authTok = 'lmstudio' }
+    }
+    '7' {
+      $backend = 'nvidia'
+      $nh = Read-Host "NVIDIA API host [$($Script:NvidiaUrl)]"
+      if ([string]::IsNullOrWhiteSpace($nh)) { $nh = $Script:NvidiaUrl }
+      $nh = $nh.TrimEnd('/')
+      if ($nh -like '*/v1') { $nh = $nh -replace '/v1$', '' }
+      $baseUrl = $nh
+      $apiKey = Read-Host 'NVIDIA API key (Bearer)'
+      Warn-NvidiaClaudeCodeProtocol
     }
     default { $backend = 'lmstudio'; $baseUrl = $Script:LmStudioUrl }
   }
@@ -1095,6 +1178,7 @@ function Main {
 
   Write-Host "Claudius v$($Script:Version) - Claude Code multi-backend ($($script:CurrentBackend))"
   Write-Host "Backend: $($script:CurrentBackend) @ $($script:CurrentBaseUrl)"
+  if ($script:CurrentBackend -eq 'nvidia') { Warn-NvidiaClaudeCodeProtocol }
   if ($dry) { Write-Host '(dry-run: will not write config or start claude)' }
   Write-Host ''
 
@@ -1186,6 +1270,10 @@ function Main {
 
   Write-Host ''
   Write-Host 'Model is ready. VS Code / Cursor: map claudeCode.environmentVariables to the same values as in settings.json env.'
+  if ($script:CurrentBackend -eq 'nvidia') {
+    Write-Host ''
+    Write-Host '  NVIDIA: if Claude reports model/access errors, integrate.api is not an Anthropic Messages endpoint - use a proxy or switch backend.' -ForegroundColor DarkYellow
+  }
   Write-Host ''
 
   if ($bypass) {
